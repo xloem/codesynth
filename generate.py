@@ -57,10 +57,10 @@ class ai21:
             }
         )
         result = result.json()
-        prompt_tokens = result['prompt']['tokens']
+        prompt = result['prompt']
         return [{
-                'generated_text': text + completion['data']['text'],
-                'tokens': prompt_tokens + completion['data']['tokens'],
+                'generated_text': prompt['text'] + completion['data']['text'],
+                'tokens': prompt['tokens'] + completion['data']['tokens'],
                 'finish_reason': completion['finishReason'],
             }
             for completion in result['completions']

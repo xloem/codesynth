@@ -32,3 +32,38 @@ class ghpy:
 class ghpy_tiny(ghpy):
     def __init__(self, model='lg/ghpy_2k'):
         super().__init__(model)
+
+xloems_ai21_apikey = '5ZqHci4NdEii0VYq9VFBJ8njMRqRiCaR'
+
+class ai21:
+    def __init__(self, apikey, model='j1-large'):
+        import requests
+        self._authorization = 'Bearer ' + apikey
+        self._model = model
+        self.requests = requests
+    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, stop_sequences = []):
+        result = self.requests.post('https://api.ai21.com/studio/v1/' + self._model + '/complete',
+            headers={'Authorization': self._authorization},
+            json={
+                'prompt': text,
+                'numResults': num_return_sequences,
+                'maxTokens': max_length,
+                'topP': top_p,
+                'stopSequences': stop_sequences,
+                'topKReturn': top_k,
+                'temperature': temperature
+            }
+        )
+        return [{
+                'generated_text': text + completion['data']['text'],
+                'tokens': completion['data']['tokens'],
+                'finishReason': completion['finishReason']
+            }
+            for completion in result.json()['completions']
+        ]
+        return result
+
+
+class ai21_jumbo(ai21):
+    def __init__(self, apikey, model='j1-jumbo'):
+        super().__init__(model, apikey)

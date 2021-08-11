@@ -1,4 +1,3 @@
-
 class genji:
     def __init__(self):
         import extern.finetuneanon_transformers.src.transformers as finetuneanon
@@ -41,31 +40,54 @@ class ai21:
         self._authorization = 'Bearer ' + apikey
         self._model = model
         self.requests = requests
-    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, stop_sequences = []):
-        result = self.requests.post('https://api.ai21.com/studio/v1/' + self._model + '/complete',
+    def _request(self, **json):
+        return self.requests.post('https://api.ai21.com/studio/v1/' + self._model + '/complete',
             headers={'Authorization': self._authorization},
-            json={
-                'prompt': text,
-                'numResults': num_return_sequences,
-                'maxTokens': max_length,
-                'topP': top_p,
-                'stopSequences': stop_sequences,
-                # if topKReturn is > 0.0 then alternative tokens for both the prompt and completion
-                #   are returned.
-                'topKReturn': top_k,
-                'temperature': temperature
-            }
+            json=json
+        ).json()
+    def tokenizer(self, text):
+        #result = self._request(
+        #    prompt = text,
+        #    maxTokens = 0
+        #)
+        #return {
+        #    'input_ids': [
+        #        token['generatedToken']['token']
+        #        # also has logprob and textRange
+        #        for token in result['prompt']['tokens']
+        #    ]
+        #}
+        return {
+            'input_ids': [ text ]
+        }
+    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, eos_token_id = None):
+        if eos_token_id is not None:
+            stop_sequences = [eos_token_id]
+        else:
+            stop_sequences = []
+        result = self._request(
+            prompt = text,
+            numResults = num_return_sequences,
+            maxTokens = max_length,
+            topP = top_p,
+            stopSequences = stop_sequences,
+            # if topKReturn is > 0.0 then alternative tokens for both the prompt and completion
+            #   are returned.
+            topKReturn = top_k,
+            temperature = temperature
         )
-        result = result.json()
         prompt = result['prompt']
-        return [{
+        final_result = []
+        for completion in result['completions']:
+            next_result = {
                 'generated_text': prompt['text'] + completion['data']['text'],
                 'tokens': prompt['tokens'] + completion['data']['tokens'],
-                'finish_reason': completion['finishReason'],
+                'finish_reason': completion['finishReason']
             }
-            for completion in result['completions']
-        ]
-        return result
+            if completion['finishReason']['reason'] == 'stop':
+                next_result['generated_text'] += completion['finishReason']['sequence']
+            final_result.append(next_result)
+        return final_result
 
 
 class ai21_jumbo(ai21):

@@ -50,16 +50,20 @@ class ai21:
                 'maxTokens': max_length,
                 'topP': top_p,
                 'stopSequences': stop_sequences,
+                # if topKReturn is > 0.0 then alternative tokens for both the prompt and completion
+                #   are returned.
                 'topKReturn': top_k,
                 'temperature': temperature
             }
         )
+        result = result.json()
+        prompt_tokens = result['prompt']['tokens']
         return [{
                 'generated_text': text + completion['data']['text'],
-                'tokens': completion['data']['tokens'],
-                'finishReason': completion['finishReason']
+                'tokens': prompt_tokens + completion['data']['tokens'],
+                'finish_reason': completion['finishReason'],
             }
-            for completion in result.json()['completions']
+            for completion in result['completions']
         ]
         return result
 

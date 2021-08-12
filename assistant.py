@@ -15,7 +15,10 @@ class Instructions:
         return open(os.path.join(self.dir, 'instructions.txt')).read()
     def prompt(self, prompt):
         data = self._all_data() + ' ' + prompt + '\n'
-        self.mode
+        result = self.pipeline(data, return_full_text=False, eos_token_id = self.eos_token_id, max_length=1024)
+        result = [item['generated_text'] for item in result]
+        return result[0]
 
 
-
+if __name__ == '__main__':
+    instructions = Instructions()

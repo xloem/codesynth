@@ -104,10 +104,50 @@ class ai21:
             final_result.append(next_result)
         return final_result
 
-
 class ai21_jumbo(ai21):
     def __init__(self, apikey, model='j1-jumbo'):
         super().__init__(model, apikey)
+
+class openai:
+    def __init__(self, apikey, engine='davinci'):
+        import requests
+        self._authorization = 'Bearer ' + apikey
+        self._engine = engine
+        self.requests = requests
+    def engines(self):
+        return self.requests.get('https://api.openai.com/v1/engines',
+            headers={'Authorization': self._authorization}
+        ).json()['data']
+    def _request(self, **json):
+        return self.requests.post('https://api.openai.com/v1/engines/' + self._engine + '/completions',
+            headers={'Authorization': self._authorization},
+            json=json
+        ).json()
+    def tokenizer(self, text):
+        return { 'input_ids': [ text ] }
+    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
+        # supports streaming
+        result = self._request(
+            prompt = text,
+            max_tokens = max_length,
+            temperature = temperature,
+            top_p = top_p,
+            n = num_return_sequences,
+            stop = eos_token_id,
+        )
+        final_result = []
+        for choice in result['choices']:
+            if return_full_text:
+                generated_text = text
+            else:
+                generated_text = ''
+            generated_text += choice['text']
+            final_result.append({
+                'generated_text': generated_text,
+                **{k:v for k,v in result.items() if k != 'choices'},
+                **{k:v for k,v in choice.items() if k != 'text'}
+            })
+        return final_result
 
 class rpc_client:
     def __init__(self, model='genji', url='http://127.0.0.1/'):

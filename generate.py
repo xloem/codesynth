@@ -108,3 +108,15 @@ class ai21:
 class ai21_jumbo(ai21):
     def __init__(self, apikey, model='j1-jumbo'):
         super().__init__(model, apikey)
+
+class rpc_client:
+    def __init__(self, model='genji', url='http://127.0.0.1/'):
+        import pjrpc
+        import pjrpc.client.backend.requests
+        self.client = pjrpc.client.backend.requests.Client(url)
+        self.model = model
+        self.proxy = self.client.proxy
+    def tokenizer(self, text, **kwparams):
+        return self.proxy.tokenizer(text=text, model=self.model, **kwparams)
+    def __call__(self, text, **kwparams):
+        return self.proxy.generate_text(text=text, model=self.model, **kwparams)

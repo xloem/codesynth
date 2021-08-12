@@ -151,12 +151,20 @@ class openai:
 
 class rpc_client:
     def __init__(self, model='genji', url='http://127.0.0.1/'):
-        import pjrpc
-        import pjrpc.client.backend.requests
-        self.client = pjrpc.client.backend.requests.Client(url)
+        import requests
         self.model = model
-        self.proxy = self.client.proxy
+        self.url = url
+        self.requests = requests
+    def _request(self, method, **kwparams):
+        return self.requests.post(self.url,
+            json=dict(
+                jsonrpc="2.0",
+                method=method,
+                id=0,
+                params=kwparams
+            )
+        ).json()['result']
     def tokenizer(self, text, **kwparams):
-        return self.proxy.tokenizer(text=text, model=self.model, **kwparams)
+        return self._request('tokenizer', text=text, model=self.model, **kwparams)
     def __call__(self, text, **kwparams):
-        return self.proxy.generate_text(text=text, model=self.model, **kwparams)
+        return self._request('generate_text', text=text, model=self.model, **kwparams)

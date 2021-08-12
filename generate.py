@@ -10,13 +10,16 @@ class genji:
     def _cuda(self, obj):
         return obj.cuda()
 
-    def __call__(self, text, use_cache=True, do_sample=True, top_k=50, temperature=0.3, top_p=0.9, repetition_penalty=1.125, min_length=1, pad_token_id=None, **kwparams):
+    def __call__(self, text, use_cache=True, do_sample=True, top_k=50, temperature=0.3, top_p=0.9, repetition_penalty=1.125, min_length=1, return_full_text = True, pad_token_id=None, **kwparams):
         if pad_token_id is None:
             pad_token_id = self.tokenizer.eos_token_id
         tokens = self.tokenizer(text, return_tensors='pt').input_ids
         tokens = self._cuda(tokens.long())
         generated_tokens = self.model.generate(tokens, use_cache=use_cache, do_sample=do_sample, top_k=top_k, temperature=temperature, top_p=top_p, repetition_penalty=repetition_penalty, min_length=min_length, pad_token_id=pad_token_id, **kwparams)
-        last_tokens = [gentoks[len(toks):] for gentoks, toks in zip(generated_tokens, tokens)]
+        if return_full_text:
+            last_tokens = generated_tokens
+        else:
+            last_tokens = [gentoks[len(toks):] for gentoks, toks in zip(generated_tokens, tokens)]
         return [{'generated_text':self.tokenizer.decode(tokens)} for tokens in last_tokens]
 
 class ghpy:
@@ -60,7 +63,7 @@ class ai21:
         return {
             'input_ids': [ text ]
         }
-    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, eos_token_id = None):
+    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
         if eos_token_id is not None:
             stop_sequences = [eos_token_id]
         else:
@@ -79,13 +82,25 @@ class ai21:
         prompt = result['prompt']
         final_result = []
         for completion in result['completions']:
+            if return_full_text:
+                generated_text = prompt['text']
+                generated_tokens = prompt['tokens']
+            else:
+                generated_text = ''
+                generated_tokens = []
+            generated_text += completion['data']['text']
+            generated_tokens += completion['data']['tokens']
+            if completion['finishReason']['reason'] == 'stop':
+                completion_sequence = completion['finishReason']['sequence']
+                generated_text += completion_sequence
+                #generated_tokens += [completion_sequence]
             next_result = {
-                'generated_text': prompt['text'] + completion['data']['text'],
-                'tokens': prompt['tokens'] + completion['data']['tokens'],
+                'prompt_text': prompt['text'],
+                'prompt_tokens': prompt['tokens'],
+                'generated_text': generated_text,
+                'tokens': generated_tokens,
                 'finish_reason': completion['finishReason']
             }
-            if completion['finishReason']['reason'] == 'stop':
-                next_result['generated_text'] += completion['finishReason']['sequence']
             final_result.append(next_result)
         return final_result
 

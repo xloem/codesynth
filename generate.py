@@ -35,8 +35,6 @@ class ghpy_tiny(ghpy):
     def __init__(self, model='lg/ghpy_2k'):
         super().__init__(model)
 
-xloems_ai21_apikey = '5ZqHci4NdEii0VYq9VFBJ8njMRqRiCaR'
-
 class ai21:
     def __init__(self, apikey, model='j1-large'):
         import requests

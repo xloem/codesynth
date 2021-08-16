@@ -1,3 +1,5 @@
+import os
+
 class genji:
     def __init__(self):
         import extern.finetuneanon_transformers.src.transformers as finetuneanon
@@ -40,7 +42,10 @@ class ghpy_tiny(ghpy):
         super().__init__(model)
 
 class ai21:
-    def __init__(self, apikey, model='j1-large'):
+    apikey = os.environ.get('AI21_API_KEY')
+    def __init__(self, model='j1-large', apikey=None):
+        if apikey is None:
+            apikey = ai21.apikey
         import requests
         self._authorization = 'Bearer ' + apikey
         self._model = model
@@ -119,11 +124,14 @@ class ai21:
             return final_results
 
 class ai21_jumbo(ai21):
-    def __init__(self, apikey, model='j1-jumbo'):
+    def __init__(self, model='j1-jumbo', apikey=None):
         super().__init__(model, apikey)
 
 class openai:
-    def __init__(self, apikey, engine='davinci'):
+    apikey = os.environ.get('OPENAI_API_KEY')
+    def __init__(self, engine='davinci', apikey=None):
+        if apikey is None:
+            apikey = openai.apikey
         import requests
         self._authorization = 'Bearer ' + apikey
         self._engine = engine

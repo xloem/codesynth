@@ -168,3 +168,9 @@ class rpc_client:
         return self._request('tokenizer', text=text, model=self.model, **kwparams)
     def __call__(self, text, **kwparams):
         return self._request('generate_text', text=text, model=self.model, **kwparams)
+
+MODELS = {
+    name: model
+    for name, model in globals().items()
+    if type(model) is type
+}

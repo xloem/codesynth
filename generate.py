@@ -22,14 +22,18 @@ class genji:
             last_tokens = [gentoks[len(toks):] for gentoks, toks in zip(generated_tokens, tokens)]
         return [{'generated_text':self.tokenizer.decode(tokens)} for tokens in last_tokens]
 
-class ghpy:
-    def __init__(self, model='lg/ghpy_20k'):
+class hf:
+    def __init__(self, model=None):
         import transformers
         self.pipeline = transformers.pipeline('text-generation', model)
         self.model = self.pipeline.model
         self.tokenizer = self.pipeline.tokenizer
     def __call__(self, *params, **kwparams):
         return self.pipeline(*params, **kwparams)
+
+class ghpy(hf):
+    def __init__(self, model='lg/ghpy_20k'):
+        super().__init__(model)
 
 class ghpy_tiny(ghpy):
     def __init__(self, model='lg/ghpy_2k'):
@@ -48,6 +52,7 @@ class ai21:
         ).json()
         if 'detail' in result and len(result.keys()) == 1:
             raise RuntimeError(*result['detail'])
+        return result
     def tokenizer(self, text):
         #result = self._request(
         #    prompt = text,
@@ -68,8 +73,7 @@ class ai21:
             stop_sequences = [eos_token_id]
         else:
             stop_sequences = []
-        result = self._request(
-            prompt = text,
+        reqparams = dict(
             numResults = num_return_sequences,
             maxTokens = max_length,
             topP = top_p,
@@ -79,30 +83,40 @@ class ai21:
             topKReturn = top_k,
             temperature = temperature
         )
-        prompt = result['prompt']
-        final_result = []
-        for completion in result['completions']:
-            if return_full_text:
-                generated_text = prompt['text']
-                generated_tokens = prompt['tokens']
-            else:
-                generated_text = ''
-                generated_tokens = []
-            generated_text += completion['data']['text']
-            generated_tokens += completion['data']['tokens']
-            if completion['finishReason']['reason'] == 'stop':
-                completion_sequence = completion['finishReason']['sequence']
-                generated_text += completion_sequence
-                #generated_tokens += [completion_sequence]
-            next_result = {
-                'prompt_text': prompt['text'],
-                'prompt_tokens': prompt['tokens'],
-                'generated_text': generated_text,
-                'tokens': generated_tokens,
-                'finish_reason': completion['finishReason']
-            }
-            final_result.append(next_result)
-        return final_result
+        if type(text) is str:
+            results = [self._request(prompt = text, **reqparams)]
+        else:
+            results = [self._request(prompt = prompt, **reqparams) for prompt in text]
+        final_results = []
+        for result in results:
+            final_result = []
+            prompt = result['prompt']
+            for completion in result['completions']:
+                if return_full_text:
+                    generated_text = prompt['text']
+                    generated_tokens = prompt['tokens']
+                else:
+                    generated_text = ''
+                    generated_tokens = []
+                generated_text += completion['data']['text']
+                generated_tokens += completion['data']['tokens']
+                if completion['finishReason']['reason'] == 'stop':
+                    completion_sequence = completion['finishReason']['sequence']
+                    generated_text += completion_sequence
+                    #generated_tokens += [completion_sequence]
+                next_result = {
+                    'prompt_text': prompt['text'],
+                    'prompt_tokens': prompt['tokens'],
+                    'generated_text': generated_text,
+                    'tokens': generated_tokens,
+                    'finish_reason': completion['finishReason']
+                }
+                final_result.append(next_result)
+            final_results.append(final_result)
+        if len(final_results) == 1:
+            return final_results[0]
+        else:
+            return final_results
 
 class ai21_jumbo(ai21):
     def __init__(self, apikey, model='j1-jumbo'):
@@ -125,9 +139,14 @@ class openai:
         ).json()
         if 'error' in result:
             raise RuntimeError(*result['error'].items())
+        return result
     def tokenizer(self, text):
         return { 'input_ids': [ text ] }
     def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
+        if type(text) is str or text is None:
+            prompts = [text]
+        else:
+            prompts = text
         # supports streaming
         result = self._request(
             prompt = text,
@@ -137,19 +156,28 @@ class openai:
             n = num_return_sequences,
             stop = eos_token_id,
         )
-        final_result = []
-        for choice in result['choices']:
-            if return_full_text:
-                generated_text = text
-            else:
-                generated_text = ''
-            generated_text += choice['text']
-            final_result.append({
-                'generated_text': generated_text,
-                **{k:v for k,v in result.items() if k != 'choices'},
-                **{k:v for k,v in choice.items() if k != 'text'}
-            })
-        return final_result
+        choices = result['choices']
+        choice_idx = 0
+        final_results = []
+        for result_idx, text in enumerate(prompts):
+            final_result = []
+            for choice in choices[choice_idx:choice_idx + num_return_sequences]:
+                if return_full_text:
+                    generated_text = text
+                else:
+                    generated_text = ''
+                generated_text += choice['text']
+                final_result.append({
+                    'generated_text': generated_text,
+                    **{k:v for k,v in result.items() if k != 'choices'},
+                    **{k:v for k,v in choice.items() if k != 'text'}
+                })
+            choice_idx += len(final_result)
+            final_results.append(final_result)
+        if len(final_results) == 1:
+            return final_results[0]
+        else:
+            return final_results
 
 class rpc_client:
     def __init__(self, model='genji', url='http://127.0.0.1/'):

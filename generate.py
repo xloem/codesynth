@@ -42,10 +42,12 @@ class ai21:
         self._model = model
         self.requests = requests
     def _request(self, **json):
-        return self.requests.post('https://api.ai21.com/studio/v1/' + self._model + '/complete',
+        result = self.requests.post('https://api.ai21.com/studio/v1/' + self._model + '/complete',
             headers={'Authorization': self._authorization},
             json=json
         ).json()
+        if 'detail' in result and len(result.keys()) == 1:
+            raise RuntimeError(*result['detail'])
     def tokenizer(self, text):
         #result = self._request(
         #    prompt = text,
@@ -117,10 +119,12 @@ class openai:
             headers={'Authorization': self._authorization}
         ).json()['data']
     def _request(self, **json):
-        return self.requests.post('https://api.openai.com/v1/engines/' + self._engine + '/completions',
+        result = self.requests.post('https://api.openai.com/v1/engines/' + self._engine + '/completions',
             headers={'Authorization': self._authorization},
             json=json
         ).json()
+        if 'error' in result:
+            raise RuntimeError(*result['error'].items())
     def tokenizer(self, text):
         return { 'input_ids': [ text ] }
     def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):

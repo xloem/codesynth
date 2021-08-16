@@ -73,14 +73,14 @@ class ai21:
         return {
             'input_ids': [ text ]
         }
-    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
+    def __call__(self, text, num_return_sequences = 1, max_length = None, max_new_tokens = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
         if eos_token_id is not None:
             stop_sequences = [eos_token_id]
         else:
             stop_sequences = []
         reqparams = dict(
             numResults = num_return_sequences,
-            maxTokens = max_length,
+            maxTokens = max_new_tokens or (max_length - 1),
             topP = top_p,
             stopSequences = stop_sequences,
             # if topKReturn is > 0.0 then alternative tokens for both the prompt and completion
@@ -150,7 +150,7 @@ class openai:
         return result
     def tokenizer(self, text):
         return { 'input_ids': [ text ] }
-    def __call__(self, text, num_return_sequences = 1, max_length = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
+    def __call__(self, text, num_return_sequences = 1, max_length = None, max_new_tokens = 8, top_k = 0, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
         if type(text) is str or text is None:
             prompts = [text]
         else:
@@ -158,7 +158,7 @@ class openai:
         # supports streaming
         result = self._request(
             prompt = text,
-            max_tokens = max_length,
+            max_tokens = max_new_tokens or (max_length - 1),
             temperature = temperature,
             top_p = top_p,
             n = num_return_sequences,

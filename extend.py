@@ -9,6 +9,7 @@ import generate
 parser = argparse.ArgumentParser(description='extend code or text')
 parser.add_argument('--model', default='genji', help=','.join(generate.MODELS.keys()))
 parser.add_argument('--apikey', default=None, help='needed for openai or ai21')
+parser.add_argument('--tokens', default=8, type=int, help='tokens to generate')
 parser.add_argument('files', default=[sys.stdin], nargs='*', type=argparse.FileType('a+'), help='files to mutate if not stdio')
 params = parser.parse_args()
 
@@ -25,7 +26,7 @@ if params.files[0] is sys.stdin:
     sys.stderr.write('Generating ...\n')
     # could have it start outputing during pauses
     sys.stdout.write(data)
-    result = model(data, return_full_text=False)
+    result = model(data, max_new_tokens=params.tokens, return_full_text=False)
     sys.stdout.write(result[0]['generated_text'])
 else:
     while True:
@@ -35,7 +36,7 @@ else:
             f.seek(0)
             data.append(f.read())
         sys.stderr.write('Generating ...\n')
-        results = model(data, return_full_text=False)
+        results = model(data, max_new_tokens=params.tokens, return_full_text=False)
         if len(data) == 1:
             results = [results]
         for f, result in zip(params.files, results):

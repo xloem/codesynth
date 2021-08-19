@@ -47,28 +47,34 @@ except ImportError:
     from collections import MutableMapping
 class CachedSplitCheckpoint(MutableMapping):
     '''
-    This mimics a transformers class for loading models, and provides for
-    loading split models from the hugging face servers using the transformers cache.
-    Otherwise, at time of writing, every split model needed to be included with git-lfs.
+    This mimics finetuneanon's SplitCheckpoint class for loading models, but provides for
+    loading split models from the hugging face servers using their cache.  The original
+    At time of writing, SplitCheckpoint provided only for loading from a local folder
+    with something like git-lfs.
     '''
-    def __init__(self, file_utils, modelnamepath, device="cpu"):
+    def __init__(self, file_utils, modelname, subpath='', device="cpu"):
         import torch
         self._file_utils = file_utils
         self._torch =  torch
-        self._modelpath = modelnamepath + '/'
+        self._modelname = modelname
+        if len(subpath) > 0 and subpath[-1] != '/':
+            subpath += '/'
+        self._modelpath = subpath
         self.device = device
         self.checkpoint = self._load(self._file_utils.SPLIT_WEIGHTS_NAME)
     def _load(self, modelpath, **kwparams):
-        bucket_url = self._file_utils.hf_bucket_url(self._modelpath + modelpath)
+        bucket_url = self._file_utils.hf_bucket_url(self._modelname, self._modelpath + modelpath)
         cached_path = self._file_utils.cached_path(bucket_url)
-        return torch.load(cached_path, **kwparams)
+        return self._torch.load(cached_path, **kwparams)
     def __getitem__(self, key):
         return self._load(str(path), map_location=self.device)
     def __copy__(self):
-        return CachedSplitCheckpoint(self._file_utils, self._modelpath, self.device)
+        return CachedSplitCheckpoint(self._file_utils, self._modelname, self._modelpath, self.device)
     def copy(self):
-        return CachedSplitCheckpoint(self._file_utils, self._modelpath, self.device)
+        return CachedSplitCheckpoint(self._file_utils, self._modelname, self._modelpath, self.device)
     # these methods are just copied from SplitCheckpoint
+    def __len__(self):
+        return len(self.checkpoint)
     def __setitem__(self, key, value):
         return
     def __delitem__(self, key, value):
@@ -78,25 +84,19 @@ class CachedSplitCheckpoint(MutableMapping):
     def __iter__(self):
         for key in self.checkpoints:
             yield (key, self.__getitem__(key))
-def finetuneanon_model(model):
-    import finetuneanon_transformers as finetuneanon
-    if os.path.exists('extern/' + model + '/model'):
-        # TODO: move genji-python-6B-split into NovelAI subfolder
-        self.model = finetuneanon.AutoModelForCausalLM.from_pretrained('extern/' + model + '/model')
-    else:
-        from finetuneanon_transformers.file_utils import cached_path, hf_bucket_url, TRANSFORMERS_CACHE
 
 class finetuneanon_split(CausalLanguageModel):
-    def __init__(self, model='NovelAI/genji-python-6B-split'):
+    def __init__(self, model='NovelAI/genji-python-6B-split', splitpath='model'):
         import finetuneanon_transformers_gn_la3_rpb as finetuneanon
         if os.path.exists('extern/' + model + '/model'):
-            # TODO: move genji-python-6B-split into NovelAI subfolder
-            self.model = finetuneanon.AutoModelForCausalLM.from_pretrained('extern/' + model + '/model')
+            self.model = finetuneanon.AutoModelForCausalLM.from_pretrained('extern/' + model + '/' + splitpath)
         else:
-            import finetuneanon_transformers.file_utils as file_utils
-            state_dict = CachedSplitCheckpoint(finetuneanon_transformers.file_utils, model + '/model')
-            config_file = file_utils.cached_path(file_utils.hf_bucket_url(model + '/model/config.json'))
-            config = finetuneanon.PretrainedConfig.from_json_file(config_file)
+            import finetuneanon_transformers_gn_la3_rpb.file_utils as file_utils
+            state_dict = CachedSplitCheckpoint(file_utils, model, splitpath)
+            config_file = file_utils.cached_path(file_utils.hf_bucket_url(model,  splitpath + '/config.json'))
+            config_dict = finetuneanon.PretrainedConfig._dict_from_json_file(config_file)
+            config_class = finetuneanon.CONFIG_MAPPING[config_dict['model_type']]
+            config = config_class.from_dict(config_dict)
             self.model = finetuneanon.AutoModelForCausalLM.from_pretrained(model, state_dict=state_dict, config=config)
 
         self.model = self.model.half().eval()

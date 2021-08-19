@@ -88,7 +88,7 @@ def finetuneanon_model(model):
 
 class finetuneanon_split(CausalLanguageModel):
     def __init__(self, model='NovelAI/genji-python-6B-split'):
-        import finetuneanon_transformers as finetuneanon
+        import finetuneanon_transformers_gn_la3_rpb as finetuneanon
         if os.path.exists('extern/' + model + '/model'):
             # TODO: move genji-python-6B-split into NovelAI subfolder
             self.model = finetuneanon.AutoModelForCausalLM.from_pretrained('extern/' + model + '/model')
@@ -305,5 +305,7 @@ class rpc_client(CausalLanguageModel):
 MODELS = {
     name: model
     for name, model in globals().items()
-    if model is not CausalLanguageModel and issubclass(model, CausalLanguageModel)
+    if model is not CausalLanguageModel
+        and type(model) is type
+        and issubclass(model, CausalLanguageModel)
 }

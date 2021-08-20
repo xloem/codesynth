@@ -5,7 +5,13 @@ import re
 pkgs = {
     'codesynth': 'codesynth',
     'finetuneanon_transformers_gn_la3_rpb':
-        'codesynth/extern/finetuneanon/gpt_neo_localattention3_rp_b/src/transformers'
+        'extern/finetuneanon/gpt_neo_localattention3_rp_b/src/transformers'
+}
+
+datas = {
+    'codesynth': [
+        'extern/NovelAI'
+    ]
 }
 
 setup(
@@ -23,5 +29,6 @@ setup(
         ]
     ],
     package_dir = pkgs,
+    package_data = datas,
     install_requires = [ ]
 )

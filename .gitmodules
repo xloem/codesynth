@@ -1,7 +1,7 @@
 [submodule "genji-python-6B-split"]
-	path = codesynth/extern/NovelAI/genji-python-6B-split
+	path = extern/NovelAI/genji-python-6B-split
 	url = https://huggingface.co/NovelAI/genji-python-6B-split
 [submodule "transformers"]
-	path = codesynth/extern/finetuneanon/gpt_neo_localattention3_rp_b
+	path = extern/finetuneanon/gpt_neo_localattention3_rp_b
 	url = https://github.com/finetuneanon/transformers
 	branch = gpt-neo-localattention3-rp-b

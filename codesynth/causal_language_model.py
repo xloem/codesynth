@@ -63,11 +63,15 @@ class CachedSplitCheckpoint(MutableMapping):
         self.device = device
         self.checkpoint = self._load(self._file_utils.SPLIT_WEIGHTS_NAME)
     def _load(self, modelpath, **kwparams):
-        bucket_url = self._file_utils.hf_bucket_url(self._modelname, self._modelpath + modelpath)
+        print('loading', modelpath, 'from huggingface cache ...')
+        fn = modelpath.split('/')[-1]
+        bucket_url = self._file_utils.hf_bucket_url(self._modelname, self._modelpath + fn)
         cached_path = self._file_utils.cached_path(bucket_url)
-        return self._torch.load(cached_path, **kwparams)
+        pt = self._torch.load(cached_path, **kwparams)
+        print('->done')
+        return pt
     def __getitem__(self, key):
-        return self._load(str(path), map_location=self.device)
+        return self._load(self.checkpoint[key], map_location=self.device)
     def __copy__(self):
         return CachedSplitCheckpoint(self._file_utils, self._modelname, self._modelpath, self.device)
     def copy(self):
@@ -87,24 +91,67 @@ class CachedSplitCheckpoint(MutableMapping):
 
 class finetuneanon_split(CausalLanguageModel):
     def __init__(self, model='NovelAI/genji-python-6B-split', splitpath='model'):
+        print('loading finetuneanon_transformers_gn_la3_rpb ...')
         import finetuneanon_transformers_gn_la3_rpb as finetuneanon
-        if os.path.exists('extern/' + model + '/model'):
-            self.model = finetuneanon.AutoModelForCausalLM.from_pretrained('extern/' + model + '/' + splitpath)
+        import finetuneanon_transformers_gn_la3_rpb.file_utils as file_utils
+        import torch
+        localpaths = [
+            os.path.join(*model.split('/'), splitpath),
+            os.path.join(os.path.dirname(__file__), '..', 'extern', *model.split('/'), splitpath)
+        ]
+        try:
+            import pkg_resources
+            pkgdatapath = os.path.join(pkg_resources.resource_filename('codesynth', model), splitpath)
+            localpaths.append(pkgdatapath)
+        except:
+            pass
+        localpaths = [
+            path for path in localpaths
+            if self._tryload(os.path.join(path, file_utils.SPLIT_WEIGHTS_NAME))
+        ]
+        if len(localpaths):
+            localpath = localpaths[0]
+            print('loading', model, 'from', localpath)
+            self.model = finetuneanon.AutoModelForCausalLM.from_pretrained(localpath)
         else:
-            import finetuneanon_transformers_gn_la3_rpb.file_utils as file_utils
+            import finetuneanon_transformers_gn_la3_rpb.modeling_utils as modeling_utils
             state_dict = CachedSplitCheckpoint(file_utils, model, splitpath)
             config_file = file_utils.cached_path(file_utils.hf_bucket_url(model,  splitpath + '/config.json'))
             config_dict = finetuneanon.PretrainedConfig._dict_from_json_file(config_file)
             config_class = finetuneanon.CONFIG_MAPPING[config_dict['model_type']]
             config = config_class.from_dict(config_dict)
-            self.model = finetuneanon.AutoModelForCausalLM.from_pretrained(model, state_dict=state_dict, config=config)
+
+            # this would work if a condition is added to from_pretrained in modeling_utils
+            #  to set is_split for remote models
+            #self.model = finetuneanon.AutoModelForCausalLM.from_pretrained(model, state_dict=state_dict, config=config)
+
+                # MODEL_FOR_CAUSAL_LM_MAPPING is also AutoModelForCausalLM._model_mapping
+            model_class = finetuneanon.MODEL_FOR_CAUSAL_LM_MAPPING[config_class]
+            with modeling_utils.no_init_weights():
+                print('constructing', config_dict['model_type'], 'with config')
+                self.model = model_class(config)
+                print('->done')
+            self.model, _, _, _ = model_class._load_state_dict_into_model(self.model, state_dict, model)
+            self.model.tie_weights()
+            self.model.eval()
+
 
         self.model = self.model.half().eval()
         self.model = self._cuda(self.model)
 
         self.tokenizer = finetuneanon.AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+        print('->done')
 
-    def _cuda(self, obj):
+    @staticmethod
+    def _tryload(path, **kwparams):
+        import torch
+        try:
+            return torch.load(path, **kwparams)
+        except:
+            return None
+
+    @staticmethod
+    def _cuda(obj):
         return obj.cuda()
 
     def __call__(self, text, use_cache=True, do_sample=True, top_k=50, temperature=0.3, top_p=0.9, repetition_penalty=1.125, min_length=1, return_full_text = True, pad_token_id=None, **kwparams):
@@ -118,6 +165,10 @@ class finetuneanon_split(CausalLanguageModel):
         else:
             last_tokens = [gentoks[len(toks):] for gentoks, toks in zip(generated_tokens, tokens)]
         return [{'generated_text':self.tokenizer.decode(tokens)} for tokens in last_tokens]
+
+class genji(finetuneanon_split):
+    def __init__(self, model='NovelAI/genji-python-6B-split', splitpath='model'):
+        super().__init__(model, splitpath)
 
 class hf(CausalLanguageModel):
     def __init__(self, model=None):

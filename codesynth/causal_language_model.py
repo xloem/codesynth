@@ -152,7 +152,10 @@ class finetuneanon_split(CausalLanguageModel):
 
     @staticmethod
     def _cuda(obj):
-        return obj.cuda()
+        try:
+            return obj.cuda()
+        except AssertionError:
+            return obj
 
     def __call__(self, text, use_cache=True, do_sample=True, top_k=50, temperature=0.3, top_p=0.9, repetition_penalty=1.125, min_length=1, return_full_text = True, pad_token_id=None, **kwparams):
         if pad_token_id is None:
@@ -333,8 +336,13 @@ class openai(CausalLanguageModel):
         else:
             return final_results
 
+<<<<<<< HEAD:codesynth/causal_language_model.py
 class rpc_client(CausalLanguageModel):
     def __init__(self, model='genji', url='http://127.0.0.1/'):
+=======
+class rpc_client:
+    def __init__(self, model='genji', url='http://127.0.0.1:8080/'):
+>>>>>>> main:generate.py
         import requests
         self.model = model
         self.url = url

@@ -1,7 +1,7 @@
 from setuptools import find_packages, setup 
 import re
 
-# provides for renaming finetuneanon's branch
+# provides for renaming finetuneanon's branch without relying on symlink
 pkgs = {
     'codesynth': 'codesynth',
     'finetuneanon_transformers_gn_la3_rpb':

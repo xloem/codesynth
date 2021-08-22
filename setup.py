@@ -10,7 +10,7 @@ pkgs = {
 
 extras = {
     'client': [ 'requests==2.26.0' ],
-    'local': [ 'torch==1.8.1', 'transformers==4.9.2' ],
+    'local': [ 'torch', 'transformers==4.9.2', 'einops==0.3.0' ],
     'server': [ 'aiohttp==3.7.4.post0', 'pjrpc==1.3.0' ],
     'all': 'auto_filled'
 }

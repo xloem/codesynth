@@ -35,10 +35,49 @@ class CausalLanguageModel:
 class transformers_base:
     modelsdir = os.environ.get('TRANSFORMERS_MODELS', os.path.join(os.path.dirname(__file__), '..', 'extern'))
     def __init__(self, transformers, model, tokenizer=None, device=0):
-        # model_dir will throw.  we can let the user know, and then load from network
+        self.logger = transformers.logging.get_logger()
+
+        if device >= 0:
+            try:
+                import torch
+                torch.tensor([]).cuda()
+            except AssertionError as e:
+                e.args = (*e.args, 'pass device=-1 to force using the cpu')
+                raise
+
+        # first check if it is cached
+        try:
+            model_org, model_name, *subfolders = model.split('/')
+            config_subpath = '/'.join((*subfolders, 'config.json'))
+            hf_bucket_url = transformers.file_utils.hf_bucket_url(f'model_org/model_name', config_subpath)
+            transformers.file_utils.cached_path(hf_bucket_url, local_files_only = True)
+            self.logger.warning('===')
+            self.logger.warning('Found %s in %s, using cloud cache.', transformers.file_utils.TRANSFORMERS_CACHE)
+            self.logger.warning('===')
+        except FileNotFoundError:
+            # if not cached, check if local path exists
+            localpath = os.path.join(transformers_base.modelsdir, model)
+            if os.path.isdir(localpath):
+                model = localpath
+            else:
+                # if not local, output warning and let transformers use its cache
+                self.logger.warning('===')
+                self.logger.warning('Model %s not found in %s.', model, transformers_base.modelsdir)
+                self.logger.warning('Will download model files from cloud.')
+                self.logger.warning('')
+                self.logger.warning('For model management, do this in a folder:')
+                self.logger.warning('\tgit-lfs install --skip-repo')
+                self.logger.warning('\tgit clone %s/%s %s', transformers.file_utils.HUGGINGFACE_CO_RESOLVE_ENDPOINT, model, model)
+                self.logger.warning('')
+                self.logger.warning('Then set one of these to that folder path:')
+                self.logger.warning('  the python variable %s.modelsdir, or', transformers_base.__name__)
+                self.logger.warning('  the environment variable TRANSFORMERS_MODELS')
+                self.logger.warning('and delete %s.', transformers.file_utils.TRANSFORMERS_CACHE)
+                self.logger.warning('===')
+
         self.pipeline = transformers.pipeline(
             'text-generation',
-            os.path.join(transformers_base.modelsdir, model),
+            model,
             tokenizer=tokenizer,
             device=device
         )
@@ -63,32 +102,26 @@ class transformers_base:
             return self
 
 class finetuneanon(transformers_base, CausalLanguageModel):
-    def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B'):
-        print('loading finetuneanon_transformers_gn_la3_rpb ...')
+    def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B', device=0):
         import finetuneanon_transformers_gn_la3_rpb as finetuneanon
-        super().__init__(finetuneanon, model, tokenizer, 0)
-        print('->done')
+        super().__init__(finetuneanon, model, tokenizer, device)
 
 class genji(finetuneanon):
-    def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B'):
-        super().__init__(model)
+    def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B', device=0):
+        super().__init__(model, tokenizer, device)
 
-class hf(transformers_base, CausalLanguageModel):
-    def __init__(self, model=None):
+class huggingface(transformers_base, CausalLanguageModel):
+    def __init__(self, model=None, *params, **kwparams):
         import transformers
-        self.pipeline = transformers.pipeline('text-generation', model)
-        self.model = self.pipeline.model
-        self.tokenizer = self.pipeline.tokenizer
-    def __call__(self, *params, **kwparams):
-        return self.pipeline(*params, **kwparams)
+        super().__init__(transformers, model, *params, **kwparams)
 
-class ghpy(hf):
-    def __init__(self, model='lg/ghpy_20k'):
-        super().__init__(model)
+class ghpy(huggingface):
+    def __init__(self, model='lg/ghpy_20k', *params, **kwparams):
+        super().__init__(model, *params, **kwparams)
 
 class ghpy_tiny(ghpy):
-    def __init__(self, model='lg/ghpy_2k'):
-        super().__init__(model)
+    def __init__(self, model='lg/ghpy_2k', *params, **kwparams):
+        super().__init__(model, *params, **kwparams)
 
 class ai21(CausalLanguageModel):
     apikey = os.environ.get('AI21_API_KEY')

@@ -6,7 +6,7 @@ from pjrpc.server.integration import aiohttp
 
 methods = pjrpc.server.MethodRegistry()
 
-import generate
+from . import causal_language_model as generate
 
 def get_model(request: web.Request, model):
     models = request.app['models']
@@ -51,6 +51,10 @@ for model in generate.__dict__.values():
 jsonrpc_app.dispatcher.add_methods(methods)
 jsonrpc_app.app['models'] = {}
 
-if __name__ == '__main__':
+def server():
     web.run_app(jsonrpc_app.app, port=6686)
 
+__all__ = ['server']
+
+if __name__ == '__main__':
+    server()

@@ -1,9 +1,15 @@
 from setuptools import find_packages, setup 
 import re
 
+pkgname = 'codesynth'
+
+scripts = [
+    f'{pkgname}-server = {pkgname}.rpc_server:server [server]'
+]
+
 # provides for renaming finetuneanon's branch without relying on symlink
 pkgs = {
-    'codesynth': 'codesynth',
+    pkgname: pkgname,
     'finetuneanon_transformers_gn_la3_rpb':
         'extern/finetuneanon/gpt_neo_localattention3_rp_b/src/transformers'
 }
@@ -22,8 +28,14 @@ extras['all'] = [
 ]
 
 setup(
-    name='codesynth',
+    name=pkgname,
     version='0.0.1',
+    package_dir = pkgs,
+    install_requires = [ ],
+    extras_require = extras,
+    entry_points = {
+        'console_scripts': scripts
+    },
     packages=[
         *[
             pkg for pkg in pkgs.keys()
@@ -35,7 +47,4 @@ setup(
             for subpkg in find_packages(path)
         ]
     ],
-    package_dir = pkgs,
-    install_requires = [ ],
-    extras_require = extras
 )

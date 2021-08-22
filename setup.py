@@ -8,11 +8,17 @@ pkgs = {
         'extern/finetuneanon/gpt_neo_localattention3_rp_b/src/transformers'
 }
 
-datas = {
-    'codesynth': [
-        'extern/NovelAI'
-    ]
+extras = {
+    'client': [ 'requests' ],
+    'local': [ 'torch', 'transformers' ],
+    'server': [ 'aiohttp', 'pjrpc' ],
+    'all': 'auto_filled'
 }
+extras['all'] = [
+    extra_dep
+    for extra_deps in extras.values()
+    for extra_dep in extra_deps
+]
 
 setup(
     name='codesynth',
@@ -21,7 +27,7 @@ setup(
         *[
             pkg for pkg in pkgs.keys()
         ],
-        # rename subpkgs
+        # rename subpkgs appropriately
         *[
             pkg + '.' + subpkg
             for pkg, path in pkgs.items()
@@ -29,6 +35,6 @@ setup(
         ]
     ],
     package_dir = pkgs,
-    package_data = datas,
-    install_requires = [ ]
+    install_requires = [ ],
+    extra_requires = extras
 )

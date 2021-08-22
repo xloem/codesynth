@@ -52,5 +52,5 @@ jsonrpc_app.dispatcher.add_methods(methods)
 jsonrpc_app.app['models'] = {}
 
 if __name__ == '__main__':
-    web.run_app(jsonrpc_app.app, port=80)
+    web.run_app(jsonrpc_app.app, port=6686)
 

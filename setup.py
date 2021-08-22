@@ -9,15 +9,16 @@ pkgs = {
 }
 
 extras = {
-    'client': [ 'requests' ],
-    'local': [ 'torch', 'transformers' ],
-    'server': [ 'aiohttp', 'pjrpc' ],
+    'client': [ 'requests==2.26.0' ],
+    'local': [ 'torch==1.8.1', 'transformers==4.9.2' ],
+    'server': [ 'aiohttp==3.7.4.post0', 'pjrpc==1.3.0' ],
     'all': 'auto_filled'
 }
 extras['all'] = [
     extra_dep
-    for extra_deps in extras.values()
+    for extra, extra_deps in extras.items()
     for extra_dep in extra_deps
+    if extra != 'all'
 ]
 
 setup(

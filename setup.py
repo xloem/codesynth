@@ -1,3 +1,19 @@
+# Copyright (C) 2021
+#
+# This file is part of codesynth.
+#
+# codesynth is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# codesynth is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with codesynth.  If not, see <http://www.gnu.org/licenses/>.
 from setuptools import find_packages, setup 
 import re
 
@@ -30,6 +46,13 @@ extras['all'] = [
 setup(
     name=pkgname,
     version='0.0.1',
+    license = 'GPLv3+',
+    classifiers = [
+        'Development Status :: 2 - Pre-Alpha',
+        'Intended Audience :: Developers',
+        'License :: OSI Approved :: GNU General Public License v3 or Later (GPLv3+)',
+        'Topic :: Software Development :: Code Generators',
+    ]
     package_dir = pkgs,
     install_requires = [ ],
     extras_require = extras,

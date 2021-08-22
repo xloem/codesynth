@@ -4,9 +4,10 @@ import argparse
 import sys
 import inspect
 
-import generate
+import codesynth as generate
 
 parser = argparse.ArgumentParser(description='extend code or text')
+parser.add_argument('--rpc', default=None, nargs='?', const='http://127.0.0.1:6686', help='connect to codesynth-server')
 parser.add_argument('--model', default='genji', help=','.join(generate.MODELS.keys()))
 parser.add_argument('--apikey', default=None, help='needed for openai or ai21')
 parser.add_argument('--tokens', default=8, type=int, help='tokens to generate')
@@ -18,7 +19,10 @@ model = generate.MODELS[params.model]
 modparams = dict()
 if params.apikey is not None and 'apikey' in inspect.signature(model).parameters:
     modparams['apikey'] = params.apikey
-model = model(**modparams)
+if params.rpc is not None:
+    model = generate.rpc_client(params.model, params.rpc)
+else:
+    model = model(**modparams)
 
 if params.files[0] is sys.stdin:
     sys.stderr.write('Reading ...\n')

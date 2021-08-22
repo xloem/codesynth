@@ -1,5 +1,5 @@
 print('loading ...')
-from generate import genji
+from codesynth import genji
 
 genji = genji()
 

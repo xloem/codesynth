@@ -36,5 +36,5 @@ setup(
     ],
     package_dir = pkgs,
     install_requires = [ ],
-    extra_requires = extras
+    extras_require = extras
 )

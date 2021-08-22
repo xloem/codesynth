@@ -33,10 +33,15 @@ class CausalLanguageModel:
     abstract = True
 
 class transformers_base:
-    modelsdir = os.environ.get('TRANSFORMERS_MODELS', os.path.join(os.path.dirname(__FILE__), '..', 'extern'))
+    modelsdir = os.environ.get('TRANSFORMERS_MODELS', os.path.join(os.path.dirname(__file__), '..', 'extern'))
     def __init__(self, transformers, model, tokenizer=None, device=0):
         # model_dir will throw.  we can let the user know, and then load from network
-        self.pipeline = transformers.pipeline('text-generation', os.path.join(hf_base.modelsdir, model), tokenizer=tokenizer, device=device)
+        self.pipeline = transformers.pipeline(
+            'text-generation',
+            os.path.join(transformers_base.modelsdir, model),
+            tokenizer=tokenizer,
+            device=device
+        )
         self.model = self.pipeline.model
         self.tokenizer = self.pipeline.tokenizer
     # todo? probably clearer to use where-ever transformers stores the default parameters,
@@ -57,7 +62,7 @@ class transformers_base:
             self.pipeline.device = self.model.device
             return self
 
-class finetuneanon(hf_base, CausalLanguageModel):
+class finetuneanon(transformers_base, CausalLanguageModel):
     def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B'):
         print('loading finetuneanon_transformers_gn_la3_rpb ...')
         import finetuneanon_transformers_gn_la3_rpb as finetuneanon
@@ -65,10 +70,10 @@ class finetuneanon(hf_base, CausalLanguageModel):
         print('->done')
 
 class genji(finetuneanon):
-    def __init__(self, model='NovelAI/genji-python-6B-split/model'):
+    def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B'):
         super().__init__(model)
 
-class hf(hf_base, CausalLanguageModel):
+class hf(transformers_base, CausalLanguageModel):
     def __init__(self, model=None):
         import transformers
         self.pipeline = transformers.pipeline('text-generation', model)

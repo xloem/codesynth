@@ -75,12 +75,17 @@ class transformers_base:
                 self.logger.warning('and delete %s.', transformers.file_utils.TRANSFORMERS_CACHE)
                 self.logger.warning('===')
 
-        self.pipeline = transformers.pipeline(
-            'text-generation',
-            model,
-            tokenizer=tokenizer,
-            device=device
-        )
+        try:
+            self.pipeline = transformers.pipeline(
+                'text-generation',
+                model,
+                tokenizer=tokenizer,
+                device=device
+            )
+        except OSError as e:
+            e.args = (*e.args, 'This can stem from a model clone without a prior `git-lfs install`.')
+            raise
+
         self.model = self.pipeline.model
         self.tokenizer = self.pipeline.tokenizer
     # todo? probably clearer to use where-ever transformers stores the default parameters,

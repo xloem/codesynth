@@ -132,6 +132,15 @@ class genji(finetuneanon):
     def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B', device=0):
         super().__init__(model, tokenizer, device)
 
+class stellaathena(transformers_base, CausalLanguageModel):
+    def __init__(self, model='EleutherAI/gpt-j-6B', *params, **kwparams):
+        import stellaathena_transformers as stellaathena
+        super().__init__(stellaathena, model, *params, **kwparams)
+
+class gptj6b(stellaathena):
+    def __init__(self, model='EleutherAI/gpt-j-6B', *params, **kwparams):
+        super().__init__(model, *params, **kwparams)
+
 class huggingface(transformers_base, CausalLanguageModel):
     def __init__(self, model=None, *params, **kwparams):
         import transformers

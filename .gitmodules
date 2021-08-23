@@ -5,3 +5,6 @@
 	path = extern/finetuneanon/gpt_neo_localattention3_rp_b
 	url = https://github.com/finetuneanon/transformers
 	branch = gpt-neo-localattention3-rp-b
+[submodule "extern/StellaAthena/transformers"]
+	path = extern/StellaAthena/transformers
+	url = https://github.com/StellaAthena/transformers.git

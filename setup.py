@@ -27,7 +27,9 @@ scripts = [
 pkgs = {
     pkgname: pkgname,
     'finetuneanon_transformers_gn_la3_rpb':
-        'extern/finetuneanon/gpt_neo_localattention3_rp_b/src/transformers'
+        'extern/finetuneanon/gpt_neo_localattention3_rp_b/src/transformers',
+    'stellaathena_transformers':
+        'extern/StellaAthena/transformers/src/transformers'
 }
 
 extras = {

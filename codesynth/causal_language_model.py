@@ -329,37 +329,44 @@ class eleuther_demo(CausalLanguageModel):
         return {
             'input_ids': [ text ]
         }
-    def __call__(self, text, max_new_tokens = 128, top_p = 1, temperature = 0, return_full_text = True, eos_token_id = None): 
-        json=dict(
-            context=text[-1024:],
-            top_p=top_p,
-            temp=temperature,
-            remove_input=not return_full_text
-        )
-        while True:
-            results = self.requests.post(self.url,
-                json=json
+    def __call__(self, texts, max_new_tokens = 128, top_p = 1, temperature = 0, return_full_text = True, eos_token_id = None):
+        if type(texts) is str:
+            texts = [texts]
+        final_results = []
+        for text in texts:
+            if len(text) == 0:
+                raise AssertionError('eleutheraii demo needs a prompt')
+            json=dict(
+                context=text[-6144:],
+                top_p=top_p,
+                temp=temperature,
+                remove_input=not return_full_text
             )
-            if results.status_code != 503:
-                break
-            import time
-            time.sleep(5)
-        try:
-            results.raise_for_status()
-            results = results.json()
-        except Exception as e:
-            print(json) 
-            e.args =(*e.args, results.text)
-            raise
-        if eos_token_id is not None:
-            for result in results:
-                text = result['generated_text']
-                offset = text.find(eos_token_id)
-                if offset >= 0:
-                    offset += len(eos_token_id)
-                    text = text[:offset]
-                    result['generated_text'] = text
-        return results
+            while True:
+                response = self.requests.post(self.url,
+                    json=json
+                )
+                if response.status_code != 503:
+                    break
+                import time
+                time.sleep(5)
+            try:
+                response.raise_for_status()
+                results = response.json()
+            except Exception as e:
+                print(json)
+                e.args =(*e.args, response.text)
+                raise
+            if eos_token_id is not None:
+                for result in results:
+                    text = result['generated_text']
+                    offset = text.find(eos_token_id)
+                    if offset >= 0:
+                        offset += len(eos_token_id)
+                        text = text[:offset]
+                        result['generated_text'] = text
+            final_results.extend(results)
+        return final_results
 
 MODELS = {
     name: model

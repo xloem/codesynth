@@ -61,6 +61,7 @@ else:
             results = [results]
         for f, result in zip(params.files, results):
             f.write(result[0]['generated_text'])
+            f.flush()
         print('Files appended to.  Will reprocess files if a linebreak is received on stdin.')
         if not sys.stdin.readline():
             break

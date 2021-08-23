@@ -54,7 +54,7 @@ setup(
         'Intended Audience :: Developers',
         'License :: OSI Approved :: GNU General Public License v3 or Later (GPLv3+)',
         'Topic :: Software Development :: Code Generators',
-    ]
+    ],
     package_dir = pkgs,
     install_requires = [ ],
     extras_require = extras,

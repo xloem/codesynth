@@ -320,7 +320,7 @@ class rpc_client:
     def __call__(self, text, **kwparams):
         return self._request('generate_text', text=text, model=self.model, **kwparams)
 
-class eleuther_demo:
+class eleuther_demo(CausalLanguageModel):
     def __init__(self, url='https://api.eleuther.ai/completion'):
         import requests
         self.url = url

@@ -294,6 +294,47 @@ class rpc_client:
     def __call__(self, text, **kwparams):
         return self._request('generate_text', text=text, model=self.model, **kwparams)
 
+class eleuther_demo:
+    def __init__(self, url='https://api.eleuther.ai/completion'):
+        import requests
+        self.url = url
+        self.requests = requests
+    def tokenizer(self, text):
+        return {
+            'input_ids': [ text ]
+        }
+    def __call__(self, text, max_new_tokens = 128, top_p = 1, temperature = 0, return_full_text = True, eos_token_id = None): 
+        json=dict(
+            context=text[-1024:],
+            top_p=top_p,
+            temp=temperature,
+            remove_input=not return_full_text
+        )
+        while True:
+            results = self.requests.post(self.url,
+                json=json
+            )
+            if results.status_code != 503:
+                break
+            import time
+            time.sleep(5)
+        try:
+            results.raise_for_status()
+            results = results.json()
+        except Exception as e:
+            print(json) 
+            e.args =(*e.args, results.text)
+            raise
+        if eos_token_id is not None:
+            for result in results:
+                text = result['generated_text']
+                offset = text.find(eos_token_id)
+                if offset >= 0:
+                    offset += len(eos_token_id)
+                    text = text[:offset]
+                    result['generated_text'] = text
+        return results
+
 MODELS = {
     name: model
     for name, model in globals().items()

@@ -15,4 +15,6 @@
 # You should have received a copy of the GNU General Public License
 # along with codesynth.  If not, see <http://www.gnu.org/licenses/>.
 from .causal_language_model import *
-from .rpc_server import server
+def server(*params, **kwparams):
+    from .rpc_server import server
+    return server(*params, **kwparams)

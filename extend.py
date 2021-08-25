@@ -27,6 +27,7 @@ parser.add_argument('--rpc', default=None, nargs='?', const='http://127.0.0.1:66
 parser.add_argument('--model', default='genji', help=','.join(generate.MODELS.keys()))
 parser.add_argument('--apikey', default=None, help='needed for openai or ai21')
 parser.add_argument('--tokens', default=8, type=int, help='tokens to generate')
+parser.add_argument('--eos-token', default=None, type=str, help='a token to end output with')
 parser.add_argument('files', default=[sys.stdin], nargs='*', type=argparse.FileType('a+'), help='files to mutate if not stdio')
 params = parser.parse_args()
 
@@ -40,23 +41,29 @@ if params.rpc is not None:
 else:
     model = model(**modparams)
 
+eos_token_id = None
+if params.eos_token is not None:
+    eos_token_id = model.tokenizer(params.eos_token)['input_ids'][-1]
+
 if params.files[0] is sys.stdin:
     sys.stderr.write('Reading ...\n')
     data = params.files[0].read()
     sys.stderr.write('Generating ...\n')
     # could have it start outputing during pauses
     sys.stdout.write(data)
-    result = model(data, max_new_tokens=params.tokens, return_full_text=False)
+    result = model(data, max_new_tokens=params.tokens, return_full_text=False, eos_token_id=eos_token_id)
     sys.stdout.write(result[0]['generated_text'])
 else:
     while True:
         sys.stderr.write('Reading ...\n')
         data = []
-        for f in params.files:
+        for idx, f in enumerate(params.files):
+            f = open(f.name, 'a+')
             f.seek(0)
+            params.files[idx] = f
             data.append(f.read())
         sys.stderr.write('Generating ...\n')
-        results = model(data, max_new_tokens=params.tokens, return_full_text=False)
+        results = model(data, max_new_tokens=params.tokens, return_full_text=False, eos_token_id=eos_token_id)
         if len(data) == 1:
             results = [results]
         for f, result in zip(params.files, results):

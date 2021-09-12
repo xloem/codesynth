@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+from dataclasses import dataclass
 import functools
 import os
 import traceback
@@ -21,18 +22,31 @@ def asyncify(func):
         return asyncio.get_running_loop().run_in_executor(None, functools.partial(func, **kwparams), *params)
     return asynced
 
+class emoji:
+    thumbsup = '👍 '
+    thumbsdown = '👎 '
+    smiley = '😃 '
+    plusone = thumbsup + smiley
+    minusone = thumbsdown
+
 class bot:
+    class channel:
+        def __init__(self):
+            self.maxscore = 0
+            self.pending = []
+            self.history = []
+            self.can_talk = False
     def __init__(self, token, model):
         self.model = model
         self.client = discord.Client()
         self.client.event(self.on_ready)
         self.client.event(self.on_message)
+        self.client.event(self.on_raw_reaction_add)
         self.token = token
 
         self.nonself_end_of_line_token = '~~'
 
-        self.channels_pending = defaultdict(list)
-        self.channels_history = defaultdict(list)
+        self.channels = defaultdict(bot.channel)
         self.new_messages = asyncio.Event()
         self.start_replying = asyncio.Event()
 
@@ -50,26 +64,35 @@ class bot:
             await self.client.close()
             raise
 
-    def msg2history(self, msg):
-        return f'{msg.author}: {msg.content}'
-    def usr2history(self, user):
-        return f'{user}:'
+    def msg2history(self, msg, chandata):
+        score = 0
+        for reaction in msg.reactions:
+            if reaction.emoji in emoji.plusone:
+                score += reaction.count
+            elif reaction.emoji in emoji.minusone:
+                score -= reaction.count
+            #print(msg.content, 'reaction:', reaction.emoji, bytes(reaction.emoji, 'utf-8'))
+        if score > chandata.maxscore:
+            chandata.maxscore = score
+        return f'{msg.author}: {score} {msg.content}'
+    def usr2history(self, user, chandata = None):
+        score = chandata.maxscore if chandata is not None else ''
+        return f'{user}: {score} '
 
     async def pump_in(self):
         #print('pump in loop')
         await asyncio.sleep(0)
         found = False
-        for channel, msgs in self.channels_pending.items():
-            if len(msgs):
-                history = self.channels_history[channel]
+        for name, channel in self.channels.items():
+            if len(channel.pending):
                 found = True
-                while len(msgs):
-                    msg = msgs.pop(0)
+                while len(channel.pending):
+                    msg = channel.pending.pop(0)
                     if msg.content.strip():
                         #print('adding to history:', msg.author, msg.content)
-                        history.append(msg)
-        if not found:
-            self.new_messages.clear()
+                        if not channel.can_talk and (str(self.client.user).split('#')[0] + ', you can talk') in msg.content:
+                            channel.can_talk = True
+                        channel.history.append(msg)
         return found
     async def pump_out(self):
         #print('pump out start')
@@ -77,23 +100,18 @@ class bot:
         while True:
             #print('pump out loop')
             found = await self.pump_in()
-            for channel, history in self.channels_history.items():
-                talk = False
-                for msg in history:
-                    if (str(self.client.user).split('#')[0] + ', you can talk') in msg.content:
-                        talk = True
-                        break
+            for channel, chandata in self.channels.items():
                 #print(channel, 'talk =', talk, 'len(history) =', len(history))
-                if talk and history[-1].author != self.client.user:
+                if chandata.can_talk and chandata.history[-1].author != self.client.user:
                     #print('responding to', history[-1].author, history[-1].content)
                     found = True
-                    preprompt = '\n' + self.usr2history(self.client.user).strip()
+                    preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
                     try:
                         removect = 0
                         reply = "don't say that"
                         while "don't say that" in reply.lower() or "stop saying that" in reply.lower():
                             await self.pump_in()
-                            prompt = '\n'.join([self.msg2history(msg) for msg in list_randshrink(history, removect)]) + preprompt
+                            prompt = '\n'.join([self.msg2history(msg, chandata) for msg in list_randshrink(chandata.history, removect)]) + preprompt
                             reply = (await asyncify(self.model)(
                                 prompt.strip(),
                                 eos_token_id=self.nonself_end_of_line_token,
@@ -104,7 +122,7 @@ class bot:
                             ))[0]['generated_text'].strip()
                             print('considering:', reply)
                             # quick fix: remove items from prompt to change context
-                            if removect < len(history):
+                            if removect < len(chandata.history):
                                 removect += 1
                         reply = reply.split('\n')[0]
                     except Exception as e:
@@ -113,6 +131,7 @@ class bot:
                         reply = '[empty message??]'
                     await channel.send(reply)
             if not found:
+                self.new_messages.clear()
                 await self.new_messages.wait()
 
     async def on_ready(self):
@@ -121,21 +140,22 @@ class bot:
             print('channel:', channel)
             if type(channel) is discord.TextChannel:
                 async for message in channel.history(limit=1024, oldest_first=True):
-                    print(channel, message.channel, message.author, message.content)
+                    #print(channel, message.channel, message.author, message.content)
                     await self.on_message(message)
         self.nonself_end_of_line_token = self.usr2history(self.client.user)
         self.start_replying.set()
     
     async def on_message(self, message):
         print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
-        self.channels_pending[message.channel].append(message)
-        #if message.author == self.client.user:
-        #    return
+        self.channels[message.channel].pending.append(message)
 
         self.new_messages.set()
 
-        #if message.content.startswith('$hello'):
-        #    await message.channel.send('Hello!')
+    async def on_raw_reaction_add(self, payload):
+        print('add', payload)
+
+    async def on_raw_reaction_remove(self, payload):
+        print('remove', payload)
 
 #model = codesynth.ai21_jumbo()
 model = codesynth.eleuther_demo()

@@ -122,14 +122,15 @@ class bot:
                         chandata.maxscore = max((self.msgscore(msg) for msg in chandata.history[-16:]))
                         preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
                         prompt += preprompt
-                        reply = (await asyncify(self.model)(
-                            prompt.strip(),
-                            eos_token_id=self.nonself_end_of_line_token,
-                            return_full_text=False,
-                            max_new_tokens=1024,
-                            #top_p=0.25
-                            #temperature=1.0
-                        ))[0]['generated_text'].strip()
+                        async with channel.typing():
+                            reply = (await asyncify(self.model)(
+                                prompt.strip(),
+                                eos_token_id=self.nonself_end_of_line_token,
+                                return_full_text=False,
+                                max_new_tokens=1024,
+                                #top_p=0.25
+                                #temperature=1.0
+                            ))[0]['generated_text'].strip()
                         print(prompt[-256:])
                         print('considering:', preprompt + ' ' + reply)
                         # quick fix: remove items from prompt to change context

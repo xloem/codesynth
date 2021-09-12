@@ -336,8 +336,9 @@ class eleuther_demo(CausalLanguageModel):
         for text in texts:
             if len(text) == 0:
                 raise AssertionError('eleutheraii demo needs a prompt')
+            tailtrim = 3072
             json=dict(
-                context=text[-6144:],
+                context=text[-tailtrim:],
                 top_p=top_p,
                 temp=temperature,
                 remove_input=not return_full_text
@@ -346,7 +347,9 @@ class eleuther_demo(CausalLanguageModel):
                 response = self.requests.post(self.url,
                     json=json
                 )
-                if response.status_code != 503:
+                if response.status_code == 500:
+                    tailtrim -=4
+                elif response.status_code != 503 and response.status_code != 502:
                     break
                 import time
                 time.sleep(5)
@@ -355,7 +358,7 @@ class eleuther_demo(CausalLanguageModel):
                 results = response.json()
             except Exception as e:
                 print(json)
-                e.args =(*e.args, response.text)
+                e.args = (*e.args, response.text)
                 raise
             if eos_token_id is not None:
                 for result in results:

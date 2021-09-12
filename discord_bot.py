@@ -41,7 +41,7 @@ class bot:
         self.client = discord.Client()
         self.client.event(self.on_ready)
         self.client.event(self.on_message)
-        #self.client.event(self.on_raw_reaction_add)
+        self.client.event(self.on_raw_reaction_add)
         #self.client.event(self.on_raw_reaction_remove)
         self.token = token
 
@@ -76,12 +76,12 @@ class bot:
 
     def scorestr(self, score):
         if score < 0:
-            score = 'bad ' + str(score)
+            str = 'bad'
         elif score > 0:
-            score = 'good ' + str(score)
+            str = 'good'
         else:
-            score = 'soso ' + str(score)
-        return score
+            str = 'soso'
+        return f'{str} {score}:'
 
     def msg2history(self, msg, chandata):
         return f'{msg.author}: {self.scorestr(self.msgscore(msg))} {msg.content}'
@@ -112,14 +112,19 @@ class bot:
             found = await self.pump_in()
             for channel, chandata in self.channels.items():
                 #print(channel, 'talk =', talk, 'len(history) =', len(history))
-                if chandata.can_talk and chandata.history[-1].author != self.client.user:
+                #if chandata.can_talk:
+                #    print(channel, 'score of last message =', self.msgscore(chandata.history[-1]))
+                if chandata.can_talk and (
+                    chandata.history[-1].author != self.client.user or
+                    self.msgscore(chandata.history[-1]) < 0
+                ):
                     #print('responding to', history[-1].author, history[-1].content)
                     found = True
                     try:
                         removect = 0
                         await self.pump_in()
                         prompt = '\n'.join([self.msg2history(msg, chandata) for msg in list_randshrink(chandata.history[-1024:], removect)])
-                        chandata.maxscore = max((self.msgscore(msg) for msg in chandata.history[-16:]))
+                        chandata.maxscore = max(0,max((self.msgscore(msg) for msg in chandata.history[-16:])))
                         preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
                         prompt += preprompt
                         async with channel.typing():
@@ -163,7 +168,8 @@ class bot:
 
         self.new_messages.set()
 
-    #async def on_raw_reaction_add(self, payload):
+    async def on_raw_reaction_add(self, payload):
+        self.new_messages.set()
     #    #print('reaction', payload)
     #    for channel, chandata in self.channels.items():
     #        if channel.id == payload.channel_id:

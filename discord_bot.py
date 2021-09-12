@@ -23,9 +23,10 @@ def asyncify(func):
     return asynced
 
 class emoji:
-    thumbsup = '👍 '
-    thumbsdown = '👎 '
-    smiley = '😃 '
+    thumbsup = '👍'
+    thumbsdown = '👎'
+    smiley = '😃'
+    poop = '💩'
     plusone = thumbsup + smiley
     minusone = thumbsdown
 
@@ -100,10 +101,13 @@ class bot:
                     msg = channel.pending.pop(0)
                     if msg.content.strip():
                         #print('adding to history:', msg.author, msg.content)
-                        if not channel.can_talk and (str(self.client.user).split('#')[0] + ', you can talk') in msg.content:
+                        if not channel.can_talk and (self.name + ', you can talk') in msg.content:
                             channel.can_talk = True
                         channel.history.append(msg)
         return found
+    @property
+    def name(self):
+        return str(self.client.user).split('#')[0]
     async def pump_out(self):
         #print('pump out start')
         await self.start_replying.wait()
@@ -141,7 +145,17 @@ class bot:
                         # quick fix: remove items from prompt to change context
                         if removect < len(chandata.history):
                             removect += 1
-                        reply = reply.split('\n')[0]
+
+                        # for multiline: read up until another message is expected
+                        lines = reply.split('\n')
+                        reply = ''
+                        for idx, line in enumerate(lines):
+                            if '#' in line: # hacky way to identify that a line is message
+                                name, bit = line.split('#', 1)
+                                if ':' in bit:
+                                    if bit.split(':')[0].isnumeric() and all((not char.isspace() for char in name)):
+                                        break
+                        reply = '\n'.join(lines[:idx])
                     except Exception as e:
                         reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
                     if len(reply) == 0:
@@ -161,34 +175,38 @@ class bot:
                     await self.on_message(message)
         self.nonself_end_of_line_token = self.usr2history(self.client.user)
         self.start_replying.set()
+
+    async def delmsg(self, message):
+        message.content = ''
+        await message.delete()
     
     async def on_message(self, message):
         print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
-        self.channels[message.channel].pending.append(message)
+        if message.reference is not None and (message.content.startswith(f'{self.name}, replace with: ') or message.content.lower().startswith('replace: ')):
+            newcontent = message.content[len(message.content.split(': ', 1)[0]):]
+            await message.reference.resolved.edit(content = newcontent)
+            print('UPDATED CONTENT:', message.reference.resolved.content)
+        elif message.reference is not None and (message.content == f'{self.name}, delete.' or message.content.lower().strip() == 'delete'):
+            await self.delmsg(message.reference.resolved)
+        else:
+            self.channels[message.channel].pending.append(message)
 
         self.new_messages.set()
 
     async def on_raw_reaction_add(self, payload):
+        if str(payload.emoji) == emoji.poop:
+            for channel, chandata in self.channels.items():
+                if channel.id == payload.channel_id:
+                    for message in (*chandata.pending, *chandata.history):
+                        if message.id == payload.message_id:
+                            await self.delmsg(message)
+                            break
         self.new_messages.set()
-    #    #print('reaction', payload)
-    #    for channel, chandata in self.channels.items():
-    #        if channel.id == payload.channel_id:
-    #            for message in (*chandata.pending, *chandata.history):
-    #                if message.id == payload.message_id:
-    #                    print(message.content, 'REACTION')
-    #                    for reaction in message.reactions:
-    #                        if reaction.emoji == payload.emoji:
-    #                            reaction.count += dict(REACTION_ADD=1,REACTION_REMOVE=-1)[payload.event_type]
-    #                            return
-    #                    message.reactions.append(discord.Reaction(message=message,emoji=str(payload.emoji),data=dict(count=1)))
-    #                    return
-    #    #raise AssertionError()
-
-    #async def on_raw_reaction_remove(self, payload):
-    #    return self.on_raw_reaction_add(self, payload)
+        print('reaction', str(payload.emoji))
 
 #model = codesynth.ai21_jumbo()
 model = codesynth.eleuther_demo()
 #model = codesynth.openai()
-bot(discord_token, model).run()
+if __name__ == '__main__':
+    bot(discord_token, model).run()
 

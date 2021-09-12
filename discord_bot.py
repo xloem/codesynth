@@ -41,7 +41,8 @@ class bot:
         self.client = discord.Client()
         self.client.event(self.on_ready)
         self.client.event(self.on_message)
-        self.client.event(self.on_raw_reaction_add)
+        #self.client.event(self.on_raw_reaction_add)
+        #self.client.event(self.on_raw_reaction_remove)
         self.token = token
 
         self.nonself_end_of_line_token = '~~'
@@ -64,19 +65,28 @@ class bot:
             await self.client.close()
             raise
 
-    def msg2history(self, msg, chandata):
+    def msgscore(self, msg):
         score = 0
         for reaction in msg.reactions:
             if reaction.emoji in emoji.plusone:
                 score += reaction.count
             elif reaction.emoji in emoji.minusone:
                 score -= reaction.count
-            #print(msg.content, 'reaction:', reaction.emoji, bytes(reaction.emoji, 'utf-8'))
-        if score > chandata.maxscore:
-            chandata.maxscore = score
-        return f'{msg.author}: {score} {msg.content}'
+        return score
+
+    def scorestr(self, score):
+        if score < 0:
+            score = 'bad ' + str(score)
+        elif score > 0:
+            score = 'good ' + str(score)
+        else:
+            score = 'soso ' + str(score)
+        return score
+
+    def msg2history(self, msg, chandata):
+        return f'{msg.author}: {self.scorestr(self.msgscore(msg))} {msg.content}'
     def usr2history(self, user, chandata = None):
-        score = chandata.maxscore if chandata is not None else ''
+        score = self.scorestr(chandata.maxscore) if chandata is not None else ''
         return f'{user}: {score} '
 
     async def pump_in(self):
@@ -105,25 +115,26 @@ class bot:
                 if chandata.can_talk and chandata.history[-1].author != self.client.user:
                     #print('responding to', history[-1].author, history[-1].content)
                     found = True
-                    preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
                     try:
                         removect = 0
-                        reply = "don't say that"
-                        while "don't say that" in reply.lower() or "stop saying that" in reply.lower():
-                            await self.pump_in()
-                            prompt = '\n'.join([self.msg2history(msg, chandata) for msg in list_randshrink(chandata.history, removect)]) + preprompt
-                            reply = (await asyncify(self.model)(
-                                prompt.strip(),
-                                eos_token_id=self.nonself_end_of_line_token,
-                                return_full_text=False,
-                                max_new_tokens=1024,
-                                #top_p=0.25
-                                temperature=1.0
-                            ))[0]['generated_text'].strip()
-                            print('considering:', reply)
-                            # quick fix: remove items from prompt to change context
-                            if removect < len(chandata.history):
-                                removect += 1
+                        await self.pump_in()
+                        prompt = '\n'.join([self.msg2history(msg, chandata) for msg in list_randshrink(chandata.history[-1024:], removect)])
+                        chandata.maxscore = max((self.msgscore(msg) for msg in chandata.history[-16:]))
+                        preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
+                        prompt += preprompt
+                        reply = (await asyncify(self.model)(
+                            prompt.strip(),
+                            eos_token_id=self.nonself_end_of_line_token,
+                            return_full_text=False,
+                            max_new_tokens=1024,
+                            #top_p=0.25
+                            #temperature=1.0
+                        ))[0]['generated_text'].strip()
+                        print(prompt[-256:])
+                        print('considering:', preprompt + ' ' + reply)
+                        # quick fix: remove items from prompt to change context
+                        if removect < len(chandata.history):
+                            removect += 1
                         reply = reply.split('\n')[0]
                     except Exception as e:
                         reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
@@ -151,11 +162,23 @@ class bot:
 
         self.new_messages.set()
 
-    async def on_raw_reaction_add(self, payload):
-        print('add', payload)
+    #async def on_raw_reaction_add(self, payload):
+    #    #print('reaction', payload)
+    #    for channel, chandata in self.channels.items():
+    #        if channel.id == payload.channel_id:
+    #            for message in (*chandata.pending, *chandata.history):
+    #                if message.id == payload.message_id:
+    #                    print(message.content, 'REACTION')
+    #                    for reaction in message.reactions:
+    #                        if reaction.emoji == payload.emoji:
+    #                            reaction.count += dict(REACTION_ADD=1,REACTION_REMOVE=-1)[payload.event_type]
+    #                            return
+    #                    message.reactions.append(discord.Reaction(message=message,emoji=str(payload.emoji),data=dict(count=1)))
+    #                    return
+    #    #raise AssertionError()
 
-    async def on_raw_reaction_remove(self, payload):
-        print('remove', payload)
+    #async def on_raw_reaction_remove(self, payload):
+    #    return self.on_raw_reaction_add(self, payload)
 
 #model = codesynth.ai21_jumbo()
 model = codesynth.eleuther_demo()

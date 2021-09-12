@@ -5,6 +5,7 @@ import traceback
 
 import codesynth
 import discord
+import random
 
 discord_token = os.environ['DISCORD_TOKEN']
 
@@ -42,19 +43,42 @@ class bot:
             for channel, msgs in self.channels_pending.items():
                 if len(msgs):
                     history = self.channels_history[channel]
-                    history.extend((f'{msg.author}: {msg.content}' for msg in msgs))
+                    history.extend((f'{msg.author}: {msg.content}' for msg in msgs if len(msg.content.strip())))
+                    talk = False
+                    for item in history:
+                        if (str(self.client.user).split('#')[0] + ', you can talk') in item:
+                            talk = True
+                            break
+                    test_history=[item for item in history]
                     found = True
-                    if msgs[-1].author != self.client.user:
-                        prompt = '\n'.join(history) + f'\n{self.client.user}:'
+                    if msgs[-1].author != self.client.user and talk:
+                        preprompt = f'\n{self.client.user}: '
                         try:
-                            reply = self.model(
-                                prompt,
-                                eos_token_id='\n',
-                                return_full_text=False,
-                                max_new_tokens=1024,
-                                #top_p=0.25
-                                temperature=1.0
-                            )[0]['generated_text'].strip()
+                            reply2 = "don't say that"
+                            while "don't say that" in reply2.lower() or "stop saying that" in reply2.lower():
+                                prompt = '\n'.join(test_history) + preprompt
+                                print('reply2=', reply2)
+                                reply = self.model(
+                                    prompt.strip(),
+                                    eos_token_id='\n',
+                                    return_full_text=False,
+                                    max_new_tokens=1024,
+                                    #top_p=0.25
+                                    temperature=1.0
+                                )[0]['generated_text'].strip()
+                                print('considering: ')
+                                print('...' + (prompt + reply)[-256:])
+                                reply2 = self.model(
+                                    prompt + reply + '\n',
+                                    eos_token_id='\n',
+                                    return_full_text=False,
+                                    max_new_tokens=1024,
+                                    temperature=1.0
+                                )[0]['generated_text'].strip()
+                                print('expecting: ' + reply2)
+                                # quick fix: remove items from prompt to change context
+                                if len(test_history):
+                                    test_history.pop(random.randint(0,len(test_history)-1))
                         except Exception as e:
                             reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
                         await channel.send(reply)
@@ -66,8 +90,10 @@ class bot:
     async def on_ready(self):
         print('We have logged in as {0.user}'.format(self.client))
         for channel in self.client.get_all_channels():
+            print('channel:', channel)
             if type(channel) is discord.TextChannel:
                 async for message in channel.history(limit=1024, oldest_first=True):
+                    print(channel, message.channel, message.author, message.content)
                     await self.on_message(message)
         self.start_replying.set()
     

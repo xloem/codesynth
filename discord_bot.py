@@ -30,41 +30,115 @@ class emoji:
     plusone = thumbsup + smiley
     minusone = thumbsdown
 
-class bot:
-    class channel:
-        def __init__(self):
-            self.maxscore = 0
-            self.pending = []
-            self.history = []
-            self.can_talk = False
-    def __init__(self, token, model):
-        self.model = model
+class Channel:
+    def __init__(self, channel):
+        self.maxscore = 0
+        self.channel = channel
+        self.pending = []
+        self.history = []
+        self.can_talk = False
+        self.boringness = 0
+
+class Bot:
+    def __init__(self, token):
         self.client = discord.Client()
         self.client.event(self.on_ready)
         self.client.event(self.on_message)
         self.client.event(self.on_raw_reaction_add)
-        #self.client.event(self.on_raw_reaction_remove)
+        self.client.event(self.on_raw_reaction_remove)
         self.token = token
 
-        self.nonself_end_of_line_token = '~~'
-
-        self.channels = defaultdict(bot.channel)
+        self.channels = {}
         self.new_messages = asyncio.Event()
         self.start_replying = asyncio.Event()
 
+    @property
+    def name(self):
+        return str(self.client.user).split('#')[0]
+
+    async def fill_history(self):
+        await asyncio.sleep(0)
+        ct = 0
+        for name, channel in self.channels.items():
+            if len(channel.pending):
+                while len(channel.pending):
+                    ct += 1
+                    msg = channel.pending.pop(0)
+                    if msg.content.strip():
+                        #print('adding to history:', msg.author, msg.content)
+                        if not channel.can_talk and (self.name + ', you can talk') in msg.content:
+                            channel.can_talk = True
+                        elif channel.can_talk and (self.name + ', stop talking') in msg.content:
+                            channel.can_talk = False
+                        channel.history.append(msg)
+                if len(channel.history) > 2048:
+                    channel.history = channel.history[-2048:]
+        return ct
+
     def run(self):
         loop = self.client.loop
+        async def do_loop():
+            try:
+                await asyncio.gather(self.client.start(self.token), self.pump())
+            except:
+                await self.client.close()
+                raise
         try:
-            loop.run_until_complete(self.loop())
+            loop.run_until_complete(do_loop())
         finally:
             loop.close()
 
-    async def loop(self):
-        try:
-            await asyncio.gather(self.client.start(self.token), self.pump_out())
-        except:
-            await self.client.close()
-            raise
+    async def on_ready(self):
+        print('We have logged in as {0.user}'.format(self.client))
+        for channel in self.client.get_all_channels():
+            print('channel:', channel)
+            if type(channel) is discord.TextChannel:
+                messages = []
+                async for message in channel.history(limit=1024, oldest_first=False):
+                    messages.insert(0, message)
+                for message in messages:
+                    #print(channel, message.channel, message.author, message.content)
+                    await self.on_message(message)
+        #self.nonself_end_of_line_token = self.usr2history(self.client.user)
+        self.start_replying.set()
+
+    async def delmsg(self, message):
+        if not isinstance(message, discord.DeletedReferencedMessage):
+            for channel in self.channels.values():
+                if channel.channel == message.channel:
+                    try:
+                        channel.history.remove(message)
+                    except:
+                        try:
+                            channel.pending.remove(message)
+                        except:
+                            pass
+                    break
+            message.content = ''
+            await message.delete()
+
+    async def preprocess_message(self, message):
+        return True
+    
+    async def on_message(self, message):
+        print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
+        if await self.preprocess_message(message):
+            channel = self.channels.setdefault(message.channel, Channel(message.channel))
+            channel.pending.append(message)
+            channel.boringness = 0
+        self.new_messages.set()
+
+    async def on_raw_reaction_add(self, payload):
+        self.new_messages.set()
+
+    async def on_raw_reaction_remove(self, payload):
+        self.new_messages.set()
+        print('reaction', str(payload.emoji))
+
+class bot(Bot):
+    def __init__(self, token, model):
+        super().__init__(token)
+        self.model = model
 
     def msgscore(self, msg):
         score = 0
@@ -74,7 +148,6 @@ class bot:
             elif str(reaction.emoji) in emoji.minusone:
                 score -= reaction.count
         return score
-
     def scorestr(self, score):
         if score < 0:
             str = 'bad'
@@ -103,34 +176,12 @@ class bot:
         score = self.scorestr(chandata.maxscore) if chandata is not None else ''
         return f'{user} {botstr}: {score}: '
 
-    async def pump_in(self):
-        #print('pump in loop')
-        await asyncio.sleep(0)
-        found = False
-        for name, channel in self.channels.items():
-            if len(channel.pending):
-                found = True
-                while len(channel.pending):
-                    msg = channel.pending.pop(0)
-                    if msg.content.strip():
-                        #print('adding to history:', msg.author, msg.content)
-                        if not channel.can_talk and (self.name + ', you can talk') in msg.content:
-                            channel.can_talk = True
-                        elif channel.can_talk and (self.name + ', stop talking') in msg.content:
-                            channel.can_talk = False
-                        channel.history.append(msg)
-                if len(channel.history) > 2048:
-                    channel.history = channel.history[-2048:]
-        return found
-    @property
-    def name(self):
-        return str(self.client.user).split('#')[0]
-    async def pump_out(self):
+    async def pump(self):
         #print('pump out start')
         await self.start_replying.wait()
         while True:
             #print('pump out loop')
-            found = await self.pump_in()
+            found = await self.fill_history()
             for channel, chandata in [*self.channels.items()]:
                 #print(channel, 'talk =', talk, 'len(history) =', len(history))
                 #if chandata.can_talk:
@@ -138,12 +189,12 @@ class bot:
                 if chandata.can_talk and (
                     chandata.history[-1].author != self.client.user or
                     self.msgscore(chandata.history[-1]) < 0
-                ):
+                ) and chandata.boringness < 128:
                     #print('responding to', history[-1].author, history[-1].content)
                     found = True
                     try:
                         removect = 0
-                        await self.pump_in()
+                        await self.fill_history()
                         prompt = '\n'.join([self.msg2history(msg, chandata) for msg in list_randshrink(chandata.history[-1024:], removect)])
                         if '(human)' not in prompt:
                             continue
@@ -153,7 +204,7 @@ class bot:
                         async with channel.typing():
                             reply = (await asyncify(self.model)(
                                 prompt.strip(),
-                                eos_token_id=self.nonself_end_of_line_token,
+                                #eos_token_id=self.nonself_end_of_line_token,
                                 return_full_text=False,
                                 max_new_tokens=1024,
                                 #top_p=0.25
@@ -199,33 +250,14 @@ class bot:
                     if len(reply) == 0:
                         reply = '[empty message??]'
                         print(reply)
+                        chandata.boringness += 1
                     else:
                         await channel.send(reply)
             if not found:
                 self.new_messages.clear()
                 await self.new_messages.wait()
 
-    async def on_ready(self):
-        print('We have logged in as {0.user}'.format(self.client))
-        for channel in self.client.get_all_channels():
-            print('channel:', channel)
-            if type(channel) is discord.TextChannel:
-                messages = []
-                async for message in channel.history(limit=1024, oldest_first=False):
-                    messages.insert(0, message)
-                for message in messages:
-                    #print(channel, message.channel, message.author, message.content)
-                    await self.on_message(message)
-        self.nonself_end_of_line_token = self.usr2history(self.client.user)
-        self.start_replying.set()
-
-    async def delmsg(self, message):
-        if not isinstance(message, discord.DeletedReferencedMessage):
-            message.content = ''
-            await message.delete()
-    
-    async def on_message(self, message):
-        print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
+    async def preprocess_message(self, message):
         if message.reference is not None and message.reference.resolved is not None and not isinstance(message.reference.resolved, discord.DeletedReferencedMessage) and message.reference.resolved.author == self.client.user and (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
             newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
             oldcontent = message.reference.resolved.content
@@ -234,12 +266,13 @@ class bot:
                 oldconent = oldcontent[:-1]
             await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
             print('UPDATED CONTENT:', message.reference.resolved.content)
-        elif message.reference is not None and (message.content == f'{self.name}, delete' or message.content.lower().strip() == 'delete'):
+            return False
+        elif message.reference is not None and (message.content.lower().startswith(f'{self.name}, delete') or message.content.lower().strip() == 'delete'):
+            print('DELETE')
             await self.delmsg(message.reference.resolved)
+            return False
         else:
-            self.channels[message.channel].pending.append(message)
-
-        self.new_messages.set()
+            return True
 
     async def on_raw_reaction_add(self, payload):
         if str(payload.emoji) == emoji.poop:
@@ -249,8 +282,7 @@ class bot:
                         if message.id == payload.message_id:
                             await self.delmsg(message)
                             break
-        self.new_messages.set()
-        print('reaction', str(payload.emoji))
+        return super().on_raw_reaction_add(payload)
 
 #model = codesynth.ai21_jumbo()
 model = codesynth.eleuther_demo()

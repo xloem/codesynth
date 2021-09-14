@@ -320,8 +320,27 @@ class rpc_client:
     def __call__(self, text, **kwparams):
         return self._request('generate_text', text=text, model=self.model, **kwparams)
 
-class eleuther_demo(CausalLanguageModel):
+class rate_limited:
+    def __init__(self, duration):
+        import time
+        self.time = time
+        self._duration = duration
+        self._mark = self.time.time()
+    def wait(self):
+        now = self.time.time()
+        diff = self.wait_needed()
+        if diff > 0:
+            #print('sleeping for', diff)
+            self.time.sleep(diff)
+        #else:
+        #    print('no sleep needed')
+        self._mark += self._duration
+    def wait_needed(self):
+        return max(0,self._mark + self._duration - self.time.time())
+
+class eleuther_demo(rate_limited, CausalLanguageModel):
     def __init__(self, url='https://api.eleuther.ai/completion'):
+        super().__init__(5)
         import requests
         self.url = url
         self.requests = requests
@@ -344,6 +363,7 @@ class eleuther_demo(CausalLanguageModel):
                 remove_input=not return_full_text
             )
             while True:
+                self.wait()
                 response = self.requests.post(self.url,
                     json=json
                 )
@@ -351,8 +371,8 @@ class eleuther_demo(CausalLanguageModel):
                     tailtrim -=4
                 elif response.status_code != 503 and response.status_code != 502:
                     break
-                import time
-                time.sleep(5)
+                #import time
+                #time.sleep(5)
             try:
                 response.raise_for_status()
                 results = response.json()
@@ -373,8 +393,9 @@ class eleuther_demo(CausalLanguageModel):
 
 _global_seed = 0
 
-class bellard_demo(CausalLanguageModel):
+class bellard_demo(rate_limited, CausalLanguageModel):
     def __init__(self, model='gptj_6B', url='https://bellard.org/textsynth/api/v1/engines'):
+        super().__init__(20)
         import json, requests
         self.url = url + '/' + model + '/completions'
         self.json = json
@@ -408,25 +429,38 @@ class bellard_demo(CausalLanguageModel):
                     seed=seed,
                     stream=True
                 )
-                response = self.requests.post(self.url,
-                    json=json,
-                    stream=True
-                )
-    
+                while True:
+                    self.wait()
+                    response = self.requests.post(self.url,
+                        json=json,
+                        stream=True
+                    )
+                    if response.status_code != 509:
+                        break
+                    self._mark += 60 * 30
+                    break
+                    #import time
+                    #print('rate limit')
+                    #time.sleep(60 * 30)
                 try:
                     response.raise_for_status()
                 except Exception as e:
                     print(json)
                     e.args = (*e.args, response.text)
                     raise
+                guesstoken_ct = 0
                 for line in response.iter_lines():
                     if len(line.strip()):
-                        token_ct += 2
-                        print(line)
                         line = self.json.loads(line)
+                        if 'total_tokens' in line:
+                            token_ct += line['total_tokens']
+                            guesstoken_ct = 0
+                        else:
+                            guesstoken_ct += 3
+                        #print(token_ct, token_ct + guesstoken_ct, max_new_tokens, line)
                         portion = line['text']
                         result += portion
-                        if (eos_token_id is not None and eos_token_id in result) or token_ct >= max_new_tokens:
+                        if (eos_token_id is not None and eos_token_id in result) or token_ct + guesstoken_ct >= max_new_tokens:
                             done = True
                             break
                 if not done:
@@ -439,6 +473,27 @@ class bellard_demo(CausalLanguageModel):
                         result = result[:offset]
             final_results.append({'generated_text': result})
         return final_results
+
+class multi_demo(rate_limited, CausalLanguageModel):
+    def __init__(self, *submodels):
+        super().__init__(0)
+        self.submodels = submodels
+    def min_wait_model(self):
+        min = None
+        for model in self.submodels:
+            wt = model.wait_needed()
+            if min is None or wt < min:
+                min = wt
+                minmodel = model
+        print('min model is ', minmodel.__class__.__name__, 'all are', [model.wait_needed() for model in self.submodels])
+        return min, minmodel
+    def wait_needed(self):
+        return self.min_wait_model()[0]
+    def tokenizer(self, text):
+        return self.min_wait_model()[1].tokenizer(text)
+    def __call__(self, *params, **kwparams):
+        self.submodels = [*self.submodels[1:], self.submodels[0]]
+        return self.min_wait_model()[1](*params, **kwparams)
 
 MODELS = {
     name: model

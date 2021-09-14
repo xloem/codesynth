@@ -69,9 +69,9 @@ class bot:
     def msgscore(self, msg):
         score = 0
         for reaction in msg.reactions:
-            if reaction.emoji in emoji.plusone:
+            if str(reaction.emoji) in emoji.plusone:
                 score += reaction.count
-            elif reaction.emoji in emoji.minusone:
+            elif str(reaction.emoji) in emoji.minusone:
                 score -= reaction.count
         return score
 
@@ -82,13 +82,19 @@ class bot:
             str = 'good'
         else:
             str = 'soso'
-        return f'{str} {score}:'
+        return f'{str} {score}'
+
+    def isscorestr(self, scorestr):
+        parts = scorestr.split(' ')
+        return len(parts) == 2 and parts[0] in ('bad','good','soso') and parts[1].isnumeric()
 
     def msg2history(self, msg, chandata):
-        return f'{msg.author}: {self.scorestr(self.msgscore(msg))} {msg.content}'
+        botstr = '(bot)' if msg.author.bot else '(human)'
+        return f'{msg.author} {botstr}: {self.scorestr(self.msgscore(msg))}: {msg.content}'
     def usr2history(self, user, chandata = None):
+        botstr = '(bot)' if user.bot else '(human)'
         score = self.scorestr(chandata.maxscore) if chandata is not None else ''
-        return f'{user}: {score} '
+        return f'{user} {botstr}: {score}: '
 
     async def pump_in(self):
         #print('pump in loop')
@@ -104,6 +110,8 @@ class bot:
                         if not channel.can_talk and (self.name + ', you can talk') in msg.content:
                             channel.can_talk = True
                         channel.history.append(msg)
+                if len(channel.history) > 2048:
+                    channel.history = channel.history[-2048:]
         return found
     @property
     def name(self):
@@ -114,7 +122,7 @@ class bot:
         while True:
             #print('pump out loop')
             found = await self.pump_in()
-            for channel, chandata in self.channels.items():
+            for channel, chandata in [*self.channels.items()]:
                 #print(channel, 'talk =', talk, 'len(history) =', len(history))
                 #if chandata.can_talk:
                 #    print(channel, 'score of last message =', self.msgscore(chandata.history[-1]))
@@ -142,25 +150,35 @@ class bot:
                             ))[0]['generated_text'].strip()
                         print(prompt[-256:])
                         print('considering:', preprompt + ' ' + reply)
+                        lines = reply.split('\n')
                         # quick fix: remove items from prompt to change context
                         if removect < len(chandata.history):
                             removect += 1
 
+                        if '(human)' not in reply:
+                            reply = '' #'!' + reply
+                            lines = ['']
+                        #elif '(human)' not in lines[1]:
+                        #    reply = '!' + reply
+
                         # for multiline: read up until another message is expected
-                        lines = reply.split('\n')
                         reply = ''
                         for idx, line in enumerate(lines):
                             if '#' in line: # hacky way to identify that a line is message
                                 name, bit = line.split('#', 1)
                                 if ':' in bit:
-                                    if bit.split(':')[0].isnumeric() and all((not char.isspace() for char in name)):
+                                    bits = bit.split(':')
+                                    namebits = bits[0].split(' ')
+                                    if len(namebits) == 2 and len(bits) > 2 and namebits[0].isnumeric() and namebits[1] in ('(bot)', '(human)') and self.isscorestr(bits[1].strip()):
                                         break
                         reply = '\n'.join(lines[:idx])
                     except Exception as e:
                         reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
                     if len(reply) == 0:
                         reply = '[empty message??]'
-                    await channel.send(reply)
+                        print(reply)
+                    else:
+                        await channel.send(reply)
             if not found:
                 self.new_messages.clear()
                 await self.new_messages.wait()
@@ -182,8 +200,8 @@ class bot:
     
     async def on_message(self, message):
         print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
-        if message.reference is not None and (message.content.startswith(f'{self.name}, replace with: ') or message.content.lower().startswith('replace: ')):
-            newcontent = message.content[len(message.content.split(': ', 1)[0]):]
+        if message.reference is not None and (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
+            newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
             await message.reference.resolved.edit(content = newcontent)
             print('UPDATED CONTENT:', message.reference.resolved.content)
         elif message.reference is not None and (message.content == f'{self.name}, delete.' or message.content.lower().strip() == 'delete'):
@@ -195,7 +213,7 @@ class bot:
 
     async def on_raw_reaction_add(self, payload):
         if str(payload.emoji) == emoji.poop:
-            for channel, chandata in self.channels.items():
+            for channel, chandata in [*self.channels.items()]:
                 if channel.id == payload.channel_id:
                     for message in (*chandata.pending, *chandata.history):
                         if message.id == payload.message_id:

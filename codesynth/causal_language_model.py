@@ -335,7 +335,7 @@ class eleuther_demo(CausalLanguageModel):
         final_results = []
         for text in texts:
             if len(text) == 0:
-                raise AssertionError('eleutheraii demo needs a prompt')
+                raise AssertionError('eleutherai demo needs a prompt')
             tailtrim = 3072
             json=dict(
                 context=text[-tailtrim:],
@@ -369,6 +369,75 @@ class eleuther_demo(CausalLanguageModel):
                         text = text[:offset]
                         result['generated_text'] = text
             final_results.extend(results)
+        return final_results
+
+_global_seed = 0
+
+class bellard_demo(CausalLanguageModel):
+    def __init__(self, model='gptj_6B', url='https://bellard.org/textsynth/api/v1/engines'):
+        import json, requests
+        self.url = url + '/' + model + '/completions'
+        self.json = json
+        self.requests = requests
+    def tokenizer(self, text):
+        return {
+            'input_ids': [ text ]
+        }
+    def __call__(self, texts, max_new_tokens = 128, top_p = 0.9, top_k = 40, temperature = 1, seed = None, return_full_text = True, eos_token_id = None):
+        if type(texts) is str:
+            texts = [texts]
+        if seed is None:
+            global _global_seed
+            seed = _global_seed
+            _global_seed += 1
+        final_results = []
+        for text in texts:
+            #if len(text) == 0:
+            #    raise AssertionError('eleutherai demo needs a prompt')
+            tailtrim = 3072
+            result = ''
+            token_ct = 0
+            done = False
+            prompt = text[-tailtrim:]
+            while not done:
+                json=dict(
+                    prompt=prompt,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                    seed=seed,
+                    stream=True
+                )
+                response = self.requests.post(self.url,
+                    json=json,
+                    stream=True
+                )
+    
+                try:
+                    response.raise_for_status()
+                except Exception as e:
+                    print(json)
+                    e.args = (*e.args, response.text)
+                    raise
+                for line in response.iter_lines():
+                    if len(line.strip()):
+                        token_ct += 2
+                        print(line)
+                        line = self.json.loads(line)
+                        portion = line['text']
+                        result += portion
+                        if (eos_token_id is not None and eos_token_id in result) or token_ct >= max_new_tokens:
+                            done = True
+                            break
+                if not done:
+                    prompt = (text + result)[-tailtrim:]
+                
+            if eos_token_id is not None:
+                    offset = result.find(eos_token_id)
+                    if offset >= 0:
+                        offset += len(eos_token_id)
+                        result = result[:offset]
+            final_results.append({'generated_text': result})
         return final_results
 
 MODELS = {

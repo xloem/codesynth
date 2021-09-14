@@ -485,7 +485,7 @@ class multi_demo(rate_limited, CausalLanguageModel):
             if min is None or wt < min:
                 min = wt
                 minmodel = model
-        print('min model is ', minmodel.__class__.__name__, 'all are', [model.wait_needed() for model in self.submodels])
+        #print('min model is ', minmodel.__class__.__name__, 'all are', [model.wait_needed() for model in self.submodels])
         return min, minmodel
     def wait_needed(self):
         return self.min_wait_model()[0]

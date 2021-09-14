@@ -88,9 +88,16 @@ class bot:
         parts = scorestr.split(' ')
         return len(parts) == 2 and parts[0] in ('bad','good','soso') and parts[1].isnumeric()
 
+    def filtercontent(self, content):
+        replacement = content.find('{replaced from:')
+        if replacement >= 0:
+            content = content[:replacement]
+        return content
+
     def msg2history(self, msg, chandata):
         botstr = '(bot)' if msg.author.bot else '(human)'
-        return f'{msg.author} {botstr}: {self.scorestr(self.msgscore(msg))}: {msg.content}'
+        content = self.filtercontent(msg.content)
+        return f'{msg.author} {botstr}: {self.scorestr(self.msgscore(msg))}: {content}'
     def usr2history(self, user, chandata = None):
         botstr = '(bot)' if user.bot else '(human)'
         score = self.scorestr(chandata.maxscore) if chandata is not None else ''
@@ -109,6 +116,8 @@ class bot:
                         #print('adding to history:', msg.author, msg.content)
                         if not channel.can_talk and (self.name + ', you can talk') in msg.content:
                             channel.can_talk = True
+                        elif channel.can_talk and (self.name + ', stop talking') in msg.content:
+                            channel.can_talk = False
                         channel.history.append(msg)
                 if len(channel.history) > 2048:
                     channel.history = channel.history[-2048:]
@@ -136,6 +145,8 @@ class bot:
                         removect = 0
                         await self.pump_in()
                         prompt = '\n'.join([self.msg2history(msg, chandata) for msg in list_randshrink(chandata.history[-1024:], removect)])
+                        if '(human)' not in prompt:
+                            continue
                         chandata.maxscore = max(0,max((self.msgscore(msg) for msg in chandata.history[-16:])))
                         preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
                         prompt += preprompt
@@ -155,14 +166,17 @@ class bot:
                         if removect < len(chandata.history):
                             removect += 1
 
-                        if '(human)' not in reply:
-                            reply = '' #'!' + reply
-                            lines = ['']
+                       # if '(human)' not in lines[1] and '(human)' not in lines[2]:
+                       #     reply = '' #'!' + reply
+                       #     lines = ['']
                         #elif '(human)' not in lines[1]:
                         #    reply = '!' + reply
 
                         # for multiline: read up until another message is expected
                         reply = ''
+                        humanct = 0
+                        botct = 0
+                        mark = 0
                         for idx, line in enumerate(lines):
                             if '#' in line: # hacky way to identify that a line is message
                                 name, bit = line.split('#', 1)
@@ -170,8 +184,16 @@ class bot:
                                     bits = bit.split(':')
                                     namebits = bits[0].split(' ')
                                     if len(namebits) == 2 and len(bits) > 2 and namebits[0].isnumeric() and namebits[1] in ('(bot)', '(human)') and self.isscorestr(bits[1].strip()):
-                                        break
-                        reply = '\n'.join(lines[:idx])
+                                        if mark == 0:
+                                            mark = idx
+                                        if '(human)' not in line:
+                                            botct += 1
+                                        else:
+                                            humanct += 1
+                                        if botct + humanct < 3:
+                                            break
+                        if humanct > 0:
+                            reply = '\n'.join(lines[:mark])
                     except Exception as e:
                         reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
                     if len(reply) == 0:
@@ -188,23 +210,31 @@ class bot:
         for channel in self.client.get_all_channels():
             print('channel:', channel)
             if type(channel) is discord.TextChannel:
-                async for message in channel.history(limit=1024, oldest_first=True):
+                messages = []
+                async for message in channel.history(limit=1024, oldest_first=False):
+                    messages.insert(0, message)
+                for message in messages:
                     #print(channel, message.channel, message.author, message.content)
                     await self.on_message(message)
         self.nonself_end_of_line_token = self.usr2history(self.client.user)
         self.start_replying.set()
 
     async def delmsg(self, message):
-        message.content = ''
-        await message.delete()
+        if not isinstance(message, discord.DeletedReferencedMessage):
+            message.content = ''
+            await message.delete()
     
     async def on_message(self, message):
         print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
-        if message.reference is not None and (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
+        if message.reference is not None and message.reference.resolved is not None and not isinstance(message.reference.resolved, discord.DeletedReferencedMessage) and message.reference.resolved.author == self.client.user and (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
             newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
-            await message.reference.resolved.edit(content = newcontent)
+            oldcontent = message.reference.resolved.content
+            while '{replaced from: ' in oldcontent:
+                oldcontent = oldcontent[oldcontent.find('{replaced from: ') + len('{replaced from: '):]
+                oldconent = oldcontent[:-1]
+            await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
             print('UPDATED CONTENT:', message.reference.resolved.content)
-        elif message.reference is not None and (message.content == f'{self.name}, delete.' or message.content.lower().strip() == 'delete'):
+        elif message.reference is not None and (message.content == f'{self.name}, delete' or message.content.lower().strip() == 'delete'):
             await self.delmsg(message.reference.resolved)
         else:
             self.channels[message.channel].pending.append(message)

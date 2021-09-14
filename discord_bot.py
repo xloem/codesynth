@@ -206,7 +206,7 @@ class bot(Bot):
                                 prompt.strip(),
                                 #eos_token_id=self.nonself_end_of_line_token,
                                 return_full_text=False,
-                                max_new_tokens=1024,
+                                max_new_tokens=512,
                                 #top_p=0.25
                                 #temperature=1.0
                             ))[0]['generated_text'].strip()
@@ -282,10 +282,10 @@ class bot(Bot):
                         if message.id == payload.message_id:
                             await self.delmsg(message)
                             break
-        return super().on_raw_reaction_add(payload)
+        return await super().on_raw_reaction_add(payload)
 
 #model = codesynth.ai21_jumbo()
-model = codesynth.eleuther_demo()
+model = codesynth.multi_demo(codesynth.eleuther_demo(), codesynth.bellard_demo())
 #model = codesynth.openai()
 if __name__ == '__main__':
     bot(discord_token, model).run()

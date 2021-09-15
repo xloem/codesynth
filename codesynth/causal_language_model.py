@@ -395,7 +395,7 @@ _global_seed = 0
 
 class bellard_demo(rate_limited, CausalLanguageModel):
     def __init__(self, model='gptj_6B', url='https://bellard.org/textsynth/api/v1/engines'):
-        super().__init__(20)
+        super().__init__(21)
         import json, requests
         self.url = url + '/' + model + '/completions'
         self.json = json

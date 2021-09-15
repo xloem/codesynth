@@ -435,6 +435,7 @@ class bellard_demo(rate_limited, CausalLanguageModel):
                         json=json,
                         stream=True
                     )
+                    self._mark = self.time.time() + self._duration
                     if response.status_code != 509:
                         break
                     self._mark += 60 * 30

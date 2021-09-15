@@ -321,6 +321,8 @@ class rpc_client:
         return self._request('generate_text', text=text, model=self.model, **kwparams)
 
 class rate_limited:
+    class TemporaryChange(Exception):
+        pass
     def __init__(self, duration):
         import time
         self.time = time
@@ -374,6 +376,7 @@ class eleuther_demo(rate_limited, CausalLanguageModel):
                     break
                 else:
                     print('rate limit on eleuther, delay = ', self.time.time() - mark, 'next attempt at', self._mark + self._duration - mark)
+                    raise rate_limited.TemporaryChange('exceeded eleuther rate limit')
                 #import time
                 #time.sleep(5)
             try:
@@ -439,19 +442,23 @@ class bellard_demo(rate_limited, CausalLanguageModel):
                         stream=True
                     )
                     self._mark = self.time.time() + self._duration
-                    if response.status_code != 509:
+                    if response.status_code == 509:
+                        # rate limit exceeded
+                        print('bellard rate limit hit =/')
+                        self._mark += 60 *30
+                        raise rate_limited.TemporaryChange('bellard rate limit exceeded')
+                    elif response.status_code == 400:
+                        # i'm guessing this is a server bug where it produces unicode output that it can't handle
+                        print('bellard status code 400, unicode output produced?')
+                        raise rate_limited.TemporaryChange('bellard status code 400, unicode output produced?')
+                    else:
                         break
-                    self._mark += 60 * 30
-                    break
-                    #import time
-                    #print('rate limit')
-                    #time.sleep(60 * 30)
                 try:
                     response.raise_for_status()
                 except Exception as e:
                     print(response.text)
                     print(json)
-                    e.args = (*e.args, response.text, json)
+                    e.args = (*e.args, response.text)
                     raise
                 guesstoken_ct = 0
                 for line in response.iter_lines():
@@ -497,8 +504,12 @@ class multi_demo(rate_limited, CausalLanguageModel):
     def tokenizer(self, text):
         return self.min_wait_model()[1].tokenizer(text)
     def __call__(self, *params, **kwparams):
-        self.submodels = [*self.submodels[1:], self.submodels[0]]
-        return self.min_wait_model()[1](*params, **kwparams)
+        while True:
+            try:
+                self.submodels = [*self.submodels[1:], self.submodels[0]]
+                return self.min_wait_model()[1](*params, **kwparams)
+            except rate_limited.TemporaryChange:
+                pass
 
 MODELS = {
     name: model

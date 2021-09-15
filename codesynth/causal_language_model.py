@@ -362,6 +362,7 @@ class eleuther_demo(rate_limited, CausalLanguageModel):
                 temp=temperature,
                 remove_input=not return_full_text
             )
+            mark = self._mark
             while True:
                 self.wait()
                 response = self.requests.post(self.url,
@@ -371,6 +372,8 @@ class eleuther_demo(rate_limited, CausalLanguageModel):
                     tailtrim -=4
                 elif response.status_code != 503 and response.status_code != 502:
                     break
+                else:
+                    print('rate limit on eleuther, delay = ', self.time.time() - mark, 'next attempt at', self._mark + self._duration - mark)
                 #import time
                 #time.sleep(5)
             try:
@@ -446,8 +449,9 @@ class bellard_demo(rate_limited, CausalLanguageModel):
                 try:
                     response.raise_for_status()
                 except Exception as e:
+                    print(response.text)
                     print(json)
-                    e.args = (*e.args, response.text)
+                    e.args = (*e.args, response.text, json)
                     raise
                 guesstoken_ct = 0
                 for line in response.iter_lines():

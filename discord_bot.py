@@ -3,6 +3,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import functools
 import os
+import sys
 import traceback
 
 import codesynth
@@ -99,6 +100,7 @@ class Bot:
                 for message in messages:
                     #print(channel, message.channel, message.author, message.content)
                     await self.on_message(message)
+            sys.stdout.flush()
         #self.nonself_end_of_line_token = self.usr2history(self.client.user)
         self.start_replying.set()
 
@@ -170,7 +172,7 @@ class bot(Bot):
     def msg2history(self, msg, chandata):
         botstr = '(bot)' if msg.author.bot else '(human)'
         content = self.filtercontent(msg.content)
-        return f'{msg.author} {botstr}: {self.scorestr(self.msgscore(msg))}: {content}'
+        return f'{msg.author} {botstr}: {self.scorestr(self.msgscore(msg))}: {msg.created_at.isoformat(" ", "milliseconds")} {content}'
     def usr2history(self, user, chandata = None):
         botstr = '(bot)' if user.bot else '(human)'
         score = self.scorestr(chandata.maxscore) if chandata is not None else ''
@@ -212,6 +214,8 @@ class bot(Bot):
                             ))[0]['generated_text'].strip()
                         print(prompt[-256:])
                         print('considering:', preprompt + ' ' + reply)
+                        date, time, reply = reply.split(' ', 2)
+                        #time = datetime.datetime.fromisoformat(date + ' ' + time)
                         lines = reply.split('\n')
                         # quick fix: remove items from prompt to change context
                         if removect < len(chandata.history):
@@ -250,8 +254,10 @@ class bot(Bot):
                     if len(reply) == 0:
                         reply = '[empty message??]'
                         print(reply)
+                        reply = ''
                         chandata.boringness += 1
-                    else:
+                    sys.stdout.flush()
+                    if len(reply) > 0:
                         await channel.send(reply)
             if not found:
                 self.new_messages.clear()
@@ -269,9 +275,11 @@ class bot(Bot):
                     oldconent = oldcontent[:-1]
                 await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
                 print('UPDATED CONTENT:', message.reference.resolved.content)
+                sys.stdout.flush()
                 return False
             elif (message.content.lower().startswith(f'{self.name}, delete') or message.content.lower().strip() == 'delete'):
                 print('DELETE')
+                sys.stdout.flush()
                 await self.delmsg(message.reference.resolved)
                 return False
         if is_bot_reply: # could also check for name mention

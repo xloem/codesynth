@@ -161,7 +161,7 @@ class bot(Bot):
 
     def isscorestr(self, scorestr):
         parts = scorestr.split(' ')
-        return len(parts) == 2 and parts[0] in ('bad','good','soso') and parts[1].isnumeric()
+        return len(parts) == 2 and parts[0] in ('bad','good','soso') and (parts[1].isnumeric() or parts[1][0] == '-' and parts[1][1:].isnumeric())
 
     def filtercontent(self, content):
         replacement = content.find('{replaced from:')

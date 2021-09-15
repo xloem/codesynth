@@ -258,21 +258,26 @@ class bot(Bot):
                 await self.new_messages.wait()
 
     async def preprocess_message(self, message):
-        if message.reference is not None and message.reference.resolved is not None and not isinstance(message.reference.resolved, discord.DeletedReferencedMessage) and message.reference.resolved.author == self.client.user and (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
-            newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
-            oldcontent = message.reference.resolved.content
-            while '{replaced from: ' in oldcontent:
-                oldcontent = oldcontent[oldcontent.find('{replaced from: ') + len('{replaced from: '):]
-                oldconent = oldcontent[:-1]
-            await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
-            print('UPDATED CONTENT:', message.reference.resolved.content)
-            return False
-        elif message.reference is not None and (message.content.lower().startswith(f'{self.name}, delete') or message.content.lower().strip() == 'delete'):
-            print('DELETE')
-            await self.delmsg(message.reference.resolved)
-            return False
-        else:
-            return True
+        is_bot_reply = False
+        if message.reference is not None and message.reference.resolved is not None and not isinstance(message.reference.resolved, discord.DeletedReferencedMessage) and message.reference.resolved.author == self.client.user:
+            is_bot_reply = True
+            if (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
+                newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
+                oldcontent = message.reference.resolved.content
+                while '{replaced from: ' in oldcontent:
+                    oldcontent = oldcontent[oldcontent.find('{replaced from: ') + len('{replaced from: '):]
+                    oldconent = oldcontent[:-1]
+                await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
+                print('UPDATED CONTENT:', message.reference.resolved.content)
+                return False
+            elif (message.content.lower().startswith(f'{self.name}, delete') or message.content.lower().strip() == 'delete'):
+                print('DELETE')
+                await self.delmsg(message.reference.resolved)
+                return False
+        if is_bot_reply: # could also check for name mention
+            if message.content.lower().startswith('ctx '):
+                _, name, cmd, *params = message.content.split(' ', 3)
+        return True
 
     async def on_raw_reaction_add(self, payload):
         if str(payload.emoji) == emoji.poop:

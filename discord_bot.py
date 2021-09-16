@@ -4,12 +4,14 @@ from dataclasses import dataclass
 from datetime import datetime
 import functools
 import os
+import pickle
+import random
 import sys
 import traceback
 
 import codesynth
 import discord
-import random
+import json
 
 discord_token = os.environ['DISCORD_TOKEN']
 
@@ -25,6 +27,17 @@ def asyncify(func):
     return asynced
 
 class emoji:
+    _list = None
+    def random():
+        if emoji._list is None:
+            import requests
+            emojis = requests.get('https://unicode.org/Public/emoji/14.0/emoji-test.txt')
+            emoji._list = [line for line in emojis.text.split('\n') if len(line) and line[0] in set('0123456789ABCDEFabcdef')]
+        import random
+        result = random.choice(emoji._list)
+        result = result.split(';')[0].strip()
+        result = ''.join((chr(int(code, 16)) for code in result.split(' ')))
+        return result
     thumbsup = '👍'
     thumbsdown = '👎'
     smiley = '😃'
@@ -41,6 +54,75 @@ class Channel:
         self.can_talk = False
         self.boringness = 0
         self.timemark = datetime.now()
+class PromptCtx:
+    dir = os.path.abspath('ctxs')
+    default_kwparams = dict(return_full_text=False, max_new_tokens=512)
+
+    def __init__(self, ctx, prompt = '', **kwparams):
+        pending_kwparams = {}
+        pending_kwparams.update(self.default_kwparams)
+        pending_kwparams.update(kwparams)
+        kwparams = pending_kwparams
+
+        self.ctx = ctx
+        self.path = os.path.join(PromptCtx.dir, ctx)
+        self.kwparams0 = None
+        self.prompt0 = None
+        if not os.path.exists(self.path):
+            os.makedirs(self.path, exist_ok=True)
+        else:
+            files = os.path.listdir(self.path)
+            files.sort()
+            while len(files):
+                filepath = os.path.join(self.path, files.pop())
+                try:
+                    kwparams, prompt = pickle.load(open(filepath, 'rb'))
+                    self.kwparams0 = kwparams
+                    self.prompt0 = prompt
+                    break
+                except:
+                    continue
+        self.kwparams = kwparams
+        self.prompt = prompt
+    def history(self):
+        files = os.path.listdir(self.path)
+        files.sort()
+        return files
+    @property
+    def is_mutated(self):
+        return self.kwparams0 != self.kwparams or self.prompt0 != self.prompt
+    def load(self, filename):
+        if self.is_mutated:
+            self.save()
+        filepath = os.path.join(self.path, filename)
+        self.kwparams, self.prompt = pickle.load(open(filepath, 'rb'))
+        self.kwparams0, self.prompt0 = self.kwparams, self.prompt
+    def save(self):
+        now = datetime.now().isoformat()
+        filename = str(now) + '-' + self.ctx + '.pickle'
+        filepath = os.path.join(self.path, filename)
+        pickle.dump((self.kwparams, self.prompt), open(filepath, 'wb'))
+        self.kwparams0, self.prompt0 = self.kwparams, self.prompt
+        return filename
+    def __del__(self):
+        self.save()
+    def kwparams2str(self):
+        return ', '.join((f'{key}={json.dumps(value)}' for key, value in self.kwparams.items()))
+    def str2kwparams(self, str):
+        new_kwparams = {}
+        str = str.strip()
+        if len(str):
+            for part in str.split(','):
+                if '=' not in part:
+                    key = part
+                    val = True
+                else:
+                    key, val = part.split('=', 1)
+                    key = key.strip()
+                val =json.loads(val)
+                new_kwparams[key] = val
+        self.kwparams.update(new_kwparams)
+
 
 class Bot:
     def __init__(self, token):
@@ -126,11 +208,14 @@ class Bot:
     
     async def on_message(self, message):
         print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
-        if await self.preprocess_message(message):
-            channel = self.channels.setdefault(message.channel, Channel(message.channel))
-            channel.pending.append(message)
-            channel.boringness = 0
-        self.new_messages.set()
+        try:
+            if await self.preprocess_message(message):
+                channel = self.channels.setdefault(message.channel, Channel(message.channel))
+                channel.pending.append(message)
+                channel.boringness = 0
+            self.new_messages.set()
+        except Exception as e:
+            print(*traceback.format_exception(type(e), e, e.__traceback__))
         sys.stdout.flush()
 
     async def on_raw_reaction_add(self, payload):
@@ -144,6 +229,7 @@ class bot(Bot):
     def __init__(self, token, model):
         super().__init__(token)
         self.model = model
+        self.ctxs = {}
 
     def msgscore(self, msg):
         score = 0
@@ -288,34 +374,87 @@ class bot(Bot):
                                 delay = 1
                             async with channel.typing():
                                 await asyncio.sleep(delay)
-                        await channel.send(reply)
+                        try:
+                            await channel.send(reply)
+                        except Exception as e:
+                            print('TOO LONG?')
+                            print(reply)
+                            print(e)
+                            await channel.send('SERVER ERROR, MESSAGE TOO LONG?  PLEASE REVIEW OUTPUT. oh next message might work who knows, maybe i can try again.')
             if not found:
                 self.new_messages.clear()
                 await self.new_messages.wait()
 
     async def preprocess_message(self, message):
         is_bot_reply = False
-        if message.reference is not None and message.reference.resolved is not None and not isinstance(message.reference.resolved, discord.DeletedReferencedMessage) and message.reference.resolved.author == self.client.user:
-            is_bot_reply = True
-            if (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
-                newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
-                oldcontent = message.reference.resolved.content
-                while '{replaced from: ' in oldcontent:
-                    oldcontent = oldcontent[oldcontent.find('{replaced from: ') + len('{replaced from: '):]
-                    oldconent = oldcontent[:-1]
-                await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
-                print('UPDATED CONTENT:', message.reference.resolved.content)
-                sys.stdout.flush()
-                return False
-            elif (message.content.lower().startswith(f'{self.name}, delete') or message.content.lower().strip() == 'delete'):
-                print('DELETE')
-                sys.stdout.flush()
-                await self.delmsg(message.reference.resolved)
+        is_reply_by_bot = False
+        if message.reference is not None and message.reference.resolved is not None and not isinstance(message.reference.resolved, discord.DeletedReferencedMessage):
+            message_replied = message.reference.resolved
+            if message_replied.author == self.client.user:
+                if any((reaction.me for reaction in message.reactions)):
+                    return False
+                await message.add_reaction(emoji.random())
+                is_bot_reply = True
+                if (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
+                    newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
+                    oldcontent = message.reference.resolved.content
+                    while '{replaced from: ' in oldcontent:
+                        oldcontent = oldcontent[oldcontent.find('{replaced from: ') + len('{replaced from: '):]
+                        oldconent = oldcontent[:-1]
+                    await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
+                    print('UPDATED CONTENT:', message.reference.resolved.content)
+                    sys.stdout.flush()
+                    return False
+                elif (message.content.lower().startswith(f'{self.name}, delete') or message.content.lower().strip() == 'delete'):
+                    print('DELETE')
+                    sys.stdout.flush()
+                    await self.delmsg(message.reference.resolved)
+                    return False
+                elif message.author == self.client.user:
+                    is_reply_by_bot = True
+        if is_reply_by_bot:
+            if message_replied.content.lower().startswith('ctx ') and message_replied.reference is not None:
+                # command result, hopefully?
                 return False
         if is_bot_reply: # could also check for name mention
-            if message.content.lower().startswith('ctx '):
-                _, name, cmd, *params = message.content.split(' ', 3)
+            try:
+                if message.content.lower().startswith('ctx '):
+                    _, name, cmd, *params = message.content.split(' ', 3)
+                    content = params[0] if len(params) else ''
+                    ctx = self.ctxs.get(name)
+                    if ctx is None:
+                        ctx = self.ctxs.setdefault(name, PromptCtx(name))
+    
+                    if cmd == "dump":
+                        await self.reply_msg(message, ctx.kwparams2str() + '\n`' + ctx.prompt + '`')
+                    elif cmd == "guess":
+                        response = await asyncify(self.model)(ctx.prompt + content, **ctx.kwparams)
+                        await self.reply_msg(message, response)
+                    elif cmd == 'params':
+                        ctx.str2kwparams(content)
+                        await self.reply_msg(message, ctx.kwparams2str())
+                    elif cmd == 'fork':
+
+                        ctx_src = self.ctxs.get(params)
+                        if ctx_src is None:
+                            ctx_src = self.ctxs.setdefault(params, PromptCtx(params))
+                        if ctx.is_mutated:
+                            ctx.save()
+                        ctx.kwparams = ctx_src.kwparams
+                        ctx.prompt = ctx_src.prompt
+                    else:
+                        await self.reply_msg(message, 'cmds are dump guess params fork')
+            except Exception as e:
+                reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                print(reply)
+                await self.reply_msg(message, reply)
+            return False
         return True
+
+    async def reply_msg(self, replyto, replywith):
+        print('reply msg', replyto, replywith)
+        await replyto.channel.send(replywith, reference=replyto)
+        print('sent')
 
     async def on_raw_reaction_add(self, payload):
         if str(payload.emoji) == emoji.poop:

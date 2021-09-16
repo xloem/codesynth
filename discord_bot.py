@@ -1,6 +1,7 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 import functools
 import os
 import sys
@@ -39,6 +40,7 @@ class Channel:
         self.history = []
         self.can_talk = False
         self.boringness = 0
+        self.timemark = datetime.now()
 
 class Bot:
     def __init__(self, token):
@@ -129,6 +131,7 @@ class Bot:
             channel.pending.append(message)
             channel.boringness = 0
         self.new_messages.set()
+        sys.stdout.flush()
 
     async def on_raw_reaction_add(self, payload):
         self.new_messages.set()
@@ -194,6 +197,7 @@ class bot(Bot):
                 ) and chandata.boringness < 128:
                     #print('responding to', history[-1].author, history[-1].content)
                     found = True
+                    reply_datetime = datetime.now()
                     try:
                         removect = 0
                         await self.fill_history()
@@ -203,18 +207,31 @@ class bot(Bot):
                         chandata.maxscore = max(0,max((self.msgscore(msg) for msg in chandata.history[-16:])))
                         preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
                         prompt += preprompt
-                        async with channel.typing():
-                            reply = (await asyncify(self.model)(
-                                prompt.strip(),
-                                #eos_token_id=self.nonself_end_of_line_token,
-                                return_full_text=False,
-                                max_new_tokens=512,
-                                #top_p=0.25
-                                #temperature=1.0
-                            ))[0]['generated_text'].strip()
+                        model_kwparams = dict(
+                            #eos_token_id=self.nonself_end_of_line_token,
+                            return_full_text=False,
+                            max_new_tokens=512,
+                            #top_p=0.25
+                            #temperature=1.0
+                        )
+                        #print(model_kwparams)
+                        sys.stdout.flush()
+                        if (chandata.timemark - datetime.now()).total_seconds() <= 10:
+                            print('typing since, given now is', datetime.now(), 'then timemark is soon:', chandata.timemark)
+                            async with channel.typing():
+                                reply = await asyncify(self.model)(prompt.strip(), **model_kwparams)
+                        else:
+                            reply = await asyncify(self.model)(prompt.strip(), **model_kwparams)
+                        reply = reply[0]['generated_text'].strip()
                         print(prompt[-256:])
                         print('considering:', preprompt + ' ' + reply)
                         date, time, reply = reply.split(' ', 2)
+                        try:
+                            reply_datetime = datetime.fromisoformat(date  + ' ' + time)
+                        except ValueError as e:
+                            print(e)
+                            continue
+                        print('time =', reply_datetime.isoformat())
                         #time = datetime.datetime.fromisoformat(date + ' ' + time)
                         lines = reply.split('\n')
                         # quick fix: remove items from prompt to change context
@@ -250,6 +267,7 @@ class bot(Bot):
                         if humanct > 0:
                             reply = '\n'.join(lines[:mark])
                     except Exception as e:
+                        print(reply)
                         reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
                     if len(reply) == 0:
                         reply = '[empty message??]'
@@ -258,6 +276,18 @@ class bot(Bot):
                         chandata.boringness += 1
                     sys.stdout.flush()
                     if len(reply) > 0:
+                        delay = (reply_datetime - datetime.now()).total_seconds()
+                        if delay > 10:
+                            chandata.timemark = reply_datetime
+                            print('too far in future to wait here for, moving on', delay, 'to', chandata.timemark)
+                            sys.stdout.flush()
+                            continue
+                        elif delay > 0:
+                            if delay > 1:
+                                await asyncio.sleep(delay - 1)
+                                delay = 1
+                            async with channel.typing():
+                                await asyncio.sleep(delay)
                         await channel.send(reply)
             if not found:
                 self.new_messages.clear()

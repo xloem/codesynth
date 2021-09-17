@@ -7,5 +7,6 @@ RUN [ "pip3", "install", "discord", "requests" ]
 # some files are presently excluded for speed in .dockerignore
 COPY codesynth ./codesynth
 COPY *.py ./
+RUN [ "mkdir", "-p", "ctxs" ]
 
 CMD [ "python3", "discord_bot.py" ]

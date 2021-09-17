@@ -66,7 +66,7 @@ class Channel:
 class PromptCtx:
     dir = os.path.abspath('ctxs')
     default_model_kwparams = dict(return_full_text=False, max_new_tokens=512)
-    default_local_kwparams = dict(append_delimiter=True, delimiter='\n', WARNING_DATA_IS_NOT_PRESERVED="WARNING DATA IS NOT PRESERVED")
+    default_local_kwparams = dict(append_delimiter=True, delimiter='\n')
 
     def __init__(self, ctx, prompt = '', **kwparams):
         pending_kwparams = {}
@@ -406,7 +406,7 @@ class bot(Bot):
                             reply = '\n'.join(lines[:mark])
                     except Exception as e:
                         print(reply)
-                        reply = err2sr(e)
+                        reply = err2str(e)
                     if len(reply) == 0:
                         reply = '[empty message??]'
                         print(reply)
@@ -591,6 +591,8 @@ class bot(Bot):
 
     async def reply_msg(self, replyto, replywith):
         #print('reply msg', replyto, replywith)
+        if not len(replywith):
+            replywith = '<no data>'
         return await replyto.channel.send(replywith, reference=replyto)
         #print('sent')
 

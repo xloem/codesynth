@@ -33,22 +33,28 @@ def err2str(error):
     return ''.join(traceback.format_exception(type(error), error, error.__traceback__))
 
 class emoji:
-    _list = None
+    name_by_unicode = None
     def random():
-        if emoji._list is None:
+        if emoji.name_by_unicode is None:
             import requests
             emojis = requests.get('https://unicode.org/Public/emoji/14.0/emoji-test.txt')
-            emoji._list = [line for line in emojis.text.split('\n') if len(line) and line[0] in set('0123456789ABCDEFabcdef')]
+            emoji_lines = [line for line in emojis.text.split('\n') if len(line) and line[0] in set('0123456789ABCDEFabcdef')]
+            emoji.name_by_unicode = {}
+            for line in emoji_lines:
+                parts = line.split(';', 1)
+                emoji = parts[0].strip()
+                emoji = ''.join((chr(int(code, 16)) for code in emoji.split(' ')))
+                name = parts[1].split('#')[-1]
+                name = name.split(' ', 3)[-1]
+                emoji.name_by_unicode[emoji] = name
         import random
-        result = random.choice(emoji._list)
-        result = result.split(';')[0].strip()
-        result = ''.join((chr(int(code, 16)) for code in result.split(' ')))
-        return result
+        return random.choice([*emoji.name_by_unicode.keys()])
     repeat = chr(0x1F501)
     thinking = chr(0x1F914)
     scissors = chr(0x2702)
     knife = chr(0x1F52A)
     running = chr(0x1F3C3)
+    fountain_pen = chr(0x1F58B)
     thumbsup = '👍'
     thumbsdown = '👎'
     smiley = '😃'
@@ -370,8 +376,8 @@ class bot(Bot):
                         reply = reply[0]['generated_text'].strip()
                         print(prompt[-256:])
                         print('considering:', preprompt + ' ' + reply)
-                        date, time, reply = reply.split(' ', 2)
                         try:
+                            date, time, reply = reply.split(' ', 2)
                             reply_datetime = datetime.fromisoformat(date  + ' ' + time)
                         except ValueError as e:
                             print(e)

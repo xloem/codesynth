@@ -1,8 +1,8 @@
 import asyncio
 from collections import defaultdict
-from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
+import contextlib
 import functools
 import io
 import os
@@ -68,7 +68,7 @@ class Channel:
 class PromptCtx:
     dir = os.path.abspath('ctxs')
     default_model_kwparams = dict(return_full_text=False, max_new_tokens=512)
-    default_local_kwparams = dict(append_delimiter=True, delimiter='\n')
+    default_local_kwparams = dict(append_delimiter=True, delimiter='\n', prefix='', include_eos=False)
 
     def __init__(self, ctx, prompt = '', **kwparams):
         pending_kwparams = {}
@@ -158,29 +158,24 @@ class PromptCtx:
     def __del__(self):
         self.save()
     def kwparams2str(self):
-        return ' '.join((f'{key}={json.dumps(value)}' for key, value in self.kwparams.items() if key != 'append_delimiter' or self.kwparams.get('delimiter')))
+        return ', '.join((
+            f'{key}={repr(value)}'
+            for key, value in self.kwparams.items()
+            if (
+                (key != 'append_delimiter' or self.kwparams.get('delimiter')) and
+                (key != 'include_eos' or self.kwparams.get('eos_token_id'))
+            )
+        ))
     def str2kwparams(self, str):
         new_kwparams = {}
-        del_ = lambda: None
-        str = str.strip()
-        if len(str):
-            for part in str.split(' '):
-                if '=' not in part:
-                    key = part
-                    val = True
-                else:
-                    key, val = part.split('=', 1)
-                    key = key.strip()
-                if val == 'del':
-                    val = del_
-                else:
-                    val =json.loads(val)
-                new_kwparams[key] = val
-        for key, val in new_kwparams.items():
-            if val is del_:
-                del self.kwparams[key]
-            else:
-                self.kwparams[key] = val
+        rm = lambda: None
+        new_kwparams.update(self.kwparams)
+        new_kwparams.update(eval('dict('+str+')', {}, dict(rm=rm, del_=rm, _del=rm, delete=rm, remove=rm, drop=rm)))
+        for key, val in [*new_kwparams.items()]:
+            if val is rm:
+                del new_kwparams[key]
+        self.kwparams = new_kwparams
+        return self.kwparams
 
 
 class Bot:
@@ -240,8 +235,11 @@ class Bot:
             print('channel:', channel)
             if type(channel) is discord.TextChannel:
                 messages = []
-                async for message in channel.history(limit=1024, oldest_first=False):
-                    messages.insert(0, message)
+                try:
+                    async for message in channel.history(limit=1024, oldest_first=False):
+                        messages.insert(0, message)
+                except discord.errors.Forbidden:
+                    pass
                 for message in messages:
                     #print(channel, message.channel, message.author, message.content)
                     await self.on_message(message)
@@ -495,12 +493,19 @@ class bot(Bot):
                         await self.reply_msg(message, ctx.kwparams2str() + '\n`' + ctx.prompt + '`')
                     elif cmd == "guess":
                         await message.add_reaction(emoji.thinking)
+                        content = ctx.kwparams.get('prefix','') + content
                         if ctx.kwparams.get('delimiter'):
                             if len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimiter']:
                                 content = ctx.kwparams['delimiter'] + content
                         if ctx.kwparams['append_delimiter']:
                             content += ctx.kwparams['delimiter']
                         response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
+                        eos = ctx.kwparams.get('eos_token_id')
+                        if eos:
+                            if response.endswith(eos) and not ctx.kwparams.get('include_eos'):
+                                response = response[:-len(eos)]
+                            elif not response.endswith(eos) and ctx.kwparams.get('include_eos'):
+                                response += eos
                         sent = await self.reply_msg(message, '`'+response+'`')
                         await message.remove_reaction(emoji.thinking, self.client.user)
                         await sent.add_reaction(emoji.thumbsup)
@@ -514,9 +519,9 @@ class bot(Bot):
                             try:
                                 if reaction_payload.user_id == message.author.id:
                                     if str(reaction_payload.emoji) == emoji.thumbsup:
-                                        ctx.prompt += content + sent.content
+                                        ctx.prompt += content + sent.content[1:-1]
                                         ctx.save()
-                                        await self.reply_msg(sent, '... ' + content + sent.content)
+                                        await self.reply_msg(sent, '... `' + content + sent.content[1:])
                                     elif str(reaction_payload.emoji) == emoji.repeat:
                                         await sent.add_reaction(emoji.thinking)
                                         response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
@@ -546,11 +551,12 @@ class bot(Bot):
                                         ctx.save()
                                         state0 = {}
                                         state0.update(ctx.state)
-                                        stdout = io.StringIO()
-                                        with redirect_stdout(stdout):
-                                            exec(sent.content[1:-1], {}, ctx.state)
+                                        captured_output = io.StringIO()
+                                        with contextlib.redirect_stdout(captured_output):
+                                            with contextlib.redirect_stderr(captured_output):
+                                                exec(sent.content[1:-1], {}, ctx.state)
                                         ctx.save()
-                                        result = stdout.getvalue()
+                                        result = captured_output.getvalue()
                                         if not len(result):
                                             result = str(ctx.state)
                                         await self.reply_msg(sent, str(result))
@@ -563,7 +569,7 @@ class bot(Bot):
                     elif cmd == 'add':
                         if ctx.kwparams.get('delimiter') and len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimiter']:
                             ctx.prompt += ctx.kwparams['delimiter']
-                        ctx.prompt += content
+                        ctx.prompt += ctx.kwparams.get('prefix','') + content
                         await self.reply_msg(message, '... ' + ctx.prompt[-256:])
                     elif cmd == 'set':
                         ctx.prompt = content

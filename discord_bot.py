@@ -166,7 +166,7 @@ class PromptCtx:
                     val = del_
                 else:
                     val =json.loads(val)
-                    new_kwparams[key] = val
+                new_kwparams[key] = val
         for key, val in new_kwparams.items():
             if val is del_:
                 del self.kwparams[key]

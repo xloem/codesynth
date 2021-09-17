@@ -38,6 +38,10 @@ class emoji:
         result = result.split(';')[0].strip()
         result = ''.join((chr(int(code, 16)) for code in result.split(' ')))
         return result
+    repeat = chr(0x1F501)
+    thinking = chr(0x1F914)
+    scissors = chr(0x2702)
+    knife = chr(0x1F52A)
     thumbsup = '👍'
     thumbsdown = '👎'
     smiley = '😃'
@@ -56,63 +60,87 @@ class Channel:
         self.timemark = datetime.now()
 class PromptCtx:
     dir = os.path.abspath('ctxs')
-    default_kwparams = dict(return_full_text=False, max_new_tokens=512)
+    default_model_kwparams = dict(return_full_text=False, max_new_tokens=512)
+    default_local_kwparams = dict(append_delimeter=True, delimeter='\n')
 
     def __init__(self, ctx, prompt = '', **kwparams):
         pending_kwparams = {}
-        pending_kwparams.update(self.default_kwparams)
+        pending_kwparams.update(self.default_model_kwparams)
+        pending_kwparams.update(self.default_local_kwparams)
         pending_kwparams.update(kwparams)
         kwparams = pending_kwparams
 
         self.ctx = ctx
         self.path = os.path.join(PromptCtx.dir, ctx)
-        self.kwparams0 = None
-        self.prompt0 = None
+        self.kwparams0 = {}
+        self.kwparams0.update(self.default_model_kwparams)
+        self.kwparams0.update(self.default_local_kwparams)
+        self.prompt0 = ''
+        self.last_filename = ''
         if not os.path.exists(self.path):
             os.makedirs(self.path, exist_ok=True)
         else:
-            files = os.path.listdir(self.path)
+            files = os.listdir(self.path)
             files.sort()
             while len(files):
-                filepath = os.path.join(self.path, files.pop())
+                filename = files.pop()
+                filepath = os.path.join(self.path, filename)
                 try:
                     kwparams, prompt = pickle.load(open(filepath, 'rb'))
-                    self.kwparams0 = kwparams
+                    self.kwparams0 = {}
+                    self.kwparams0.update(kwparams)
                     self.prompt0 = prompt
+                    self.last_filename = filename
                     break
                 except:
                     continue
         self.kwparams = kwparams
         self.prompt = prompt
+    @property
+    def model_kwparams(self):
+        result = {}
+        result.update(self.kwparams)
+        for key in PromptCtx.default_local_kwparams:
+            if key in result:
+                del result[key]
+        return result
     def history(self):
-        files = os.path.listdir(self.path)
+        files = os.listdir(self.path)
         files.sort()
         return files
     @property
     def is_mutated(self):
         return self.kwparams0 != self.kwparams or self.prompt0 != self.prompt
     def load(self, filename):
-        if self.is_mutated:
-            self.save()
+        self.save()
         filepath = os.path.join(self.path, filename)
         self.kwparams, self.prompt = pickle.load(open(filepath, 'rb'))
-        self.kwparams0, self.prompt0 = self.kwparams, self.prompt
+        self.kwparams0 = {}
+        self.kwparams0.update(self.kwparams)
+        self.prompt0 = self.prompt
+        self.last_filename = filename
     def save(self):
-        now = datetime.now().isoformat()
-        filename = str(now) + '-' + self.ctx + '.pickle'
-        filepath = os.path.join(self.path, filename)
-        pickle.dump((self.kwparams, self.prompt), open(filepath, 'wb'))
-        self.kwparams0, self.prompt0 = self.kwparams, self.prompt
-        return filename
+        if self.is_mutated:
+            now = datetime.now().isoformat()
+            filename = str(now) + '-' + self.ctx + '.pickle'
+            filepath = os.path.join(self.path, filename)
+            pickle.dump((self.kwparams, self.prompt), open(filepath, 'wb'))
+            self.kwparams0 = {}
+            self.kwparams0.update(self.kwparams)
+            self.prompt0 = self.prompt
+            self.last_filename = filename
+            return filename
+        else:
+            return self.last_filename
     def __del__(self):
         self.save()
     def kwparams2str(self):
-        return ', '.join((f'{key}={json.dumps(value)}' for key, value in self.kwparams.items()))
+        return ' '.join((f'{key}={json.dumps(value)}' for key, value in self.kwparams.items() if key != 'append_delimeter' or self.kwparams.get('delimeter')))
     def str2kwparams(self, str):
         new_kwparams = {}
         str = str.strip()
         if len(str):
-            for part in str.split(','):
+            for part in str.split(' '):
                 if '=' not in part:
                     key = part
                     val = True
@@ -136,6 +164,8 @@ class Bot:
         self.channels = {}
         self.new_messages = asyncio.Event()
         self.start_replying = asyncio.Event()
+
+        self.on_reaction = {}
 
     @property
     def name(self):
@@ -393,7 +423,12 @@ class bot(Bot):
             if message_replied.author == self.client.user:
                 if any((reaction.me for reaction in message.reactions)):
                     return False
-                await message.add_reaction(emoji.random())
+                while True:
+                    try:
+                        await message.add_reaction(emoji.random())
+                        break
+                    except discord.errors.HTTPException: # unknown emoji
+                        continue
                 is_bot_reply = True
                 if (message.content.startswith(f'{self.name}, replace with:') or message.content.lower().startswith('replace:')):
                     newcontent = message.content[len(message.content.split(':', 1)[0]) + 2:].strip()
@@ -428,22 +463,91 @@ class bot(Bot):
                     if cmd == "dump":
                         await self.reply_msg(message, ctx.kwparams2str() + '\n`' + ctx.prompt + '`')
                     elif cmd == "guess":
-                        response = await asyncify(self.model)(ctx.prompt + content, **ctx.kwparams)
-                        await self.reply_msg(message, response)
+                        await message.add_reaction(emoji.thinking)
+                        if ctx.kwparams.get('delimeter'):
+                            if len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimeter']:
+                                content = ctx.kwparams['delimeter'] + content
+                        if ctx.kwparams['append_delimeter']:
+                            content += ctx.kwparams['delimeter']
+                        response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
+                        sent = await self.reply_msg(message, response)
+                        await message.remove_reaction(emoji.thinking, self.client.user)
+                        await sent.add_reaction(emoji.thumbsup)
+                        await sent.add_reaction(emoji.knife)
+                        await sent.add_reaction(emoji.scissors)
+                        await sent.add_reaction(emoji.repeat)
+                        await sent.add_reaction(emoji.poop)
+                        async def handle(reaction_payload):
+                            if reaction_payload.user_id == message.author.id:
+                                if str(reaction_payload.emoji) == emoji.thumbsup:
+                                    ctx.prompt += content + response
+                                    await self.reply_msg('... ' + content + response, sent)
+                                elif str(reaction_payload.emoji) == emoji.repeat:
+                                    await sent.add_reaction(emoji.thinking)
+                                    response = (await asyncify(self.model)(ctx.prompt + content, **ctx.kwparams))[0]['generated_text']
+                                    await sent.edit(content=response)
+                                    await sent.remove_reaction(emoji.thinking, self.client.user)
+                                elif str(reaction_payload.emoji) == emoji.scissors:
+                                    idx = sent.content.rfind(ctx.kwparams['delimeter'])
+                                    if idx == -1:
+                                        idx = sent.content.rfind('\n')
+                                    if idx == -1:
+                                        idx = sent.content.rfind(' ')
+                                    if idx == -1:
+                                        idx = len(sent.content) - 1
+                                    if idx > 0:
+                                        await sent.edit(content=sent.content[:idx])
+                                elif str(reaction_payload.emoji) == emoji.knife:
+                                    idx = sent.content.find(ctx.kwparams['delimeter'])
+                                    if idx == -1:
+                                        idx = sent.content.find('\n')
+                                    if idx == -1:
+                                        idx = sent.content.find(' ')
+                                    if idx == -1 and len(sent.content) > 1:
+                                        idx = 0
+                                    if idx >= 0:
+                                        await sent.edit(content=sent.content[idx+1:])
+                        self.on_reaction[sent.id] = handle
+                    #elif cmd == 'join':
+                    #    ctx.prompt += content
+                    #    await self.reply_msg(message, '... ' + ctx.prompt[-256:])
+                    elif cmd == 'add':
+                        if ctx.kwparams.get('delimeter') and len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimeter']:
+                            ctx.prompt += ctx.kwparams['delimeter']
+                        ctx.prompt += content
+                        await self.reply_msg(message, '... ' + ctx.prompt[-256:])
+                    elif cmd == 'set':
+                        ctx.prompt = content
+                        await self.reply_msg(message, ctx.prompt)
                     elif cmd == 'params':
                         ctx.str2kwparams(content)
                         await self.reply_msg(message, ctx.kwparams2str())
                     elif cmd == 'fork':
-
-                        ctx_src = self.ctxs.get(params)
+                        ctx_src = self.ctxs.get(content)
                         if ctx_src is None:
-                            ctx_src = self.ctxs.setdefault(params, PromptCtx(params))
+                            ctx_src = self.ctxs.setdefault(content, PromptCtx(content))
                         if ctx.is_mutated:
                             ctx.save()
                         ctx.kwparams = ctx_src.kwparams
                         ctx.prompt = ctx_src.prompt
+                        await self.reply_msg(message, ctx.kwparams2str())
+                    elif cmd == 'save':
+                        await self.reply_msg(message, ctx.save())
+                    elif cmd == 'list':
+                        await self.reply_msg(message, '\n'.join(ctx.history()))
+                    elif cmd == 'load':
+                        if content == '':
+                            content = ctx.last_filename
+                        ctx.load(content)
+                        await self.reply_msg(message, ctx.kwparams2str())
+                    #elif cmd == 'addline':
+                    #    if len(content) == 0:
+                    #        content = message_replied.content
+                    #    if len(ctx.prompt) and ctx.prompt[-1] != '\n':
+                    #        ctx.prompt += 
+                    #    ctx.prompt += 
                     else:
-                        await self.reply_msg(message, 'cmds are dump guess params fork')
+                        await self.reply_msg(message, 'cmds are dump guess params fork add set save list load')
             except Exception as e:
                 reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
                 print(reply)
@@ -452,19 +556,30 @@ class bot(Bot):
         return True
 
     async def reply_msg(self, replyto, replywith):
-        print('reply msg', replyto, replywith)
-        await replyto.channel.send(replywith, reference=replyto)
-        print('sent')
+        #print('reply msg', replyto, replywith)
+        return await replyto.channel.send(replywith, reference=replyto)
+        #print('sent')
 
     async def on_raw_reaction_add(self, payload):
-        if str(payload.emoji) == emoji.poop:
-            for channel, chandata in [*self.channels.items()]:
-                if channel.id == payload.channel_id:
-                    for message in (*chandata.pending, *chandata.history):
-                        if message.id == payload.message_id:
-                            await self.delmsg(message)
-                            break
+        if payload.user_id != self.client.user.id:
+            if str(payload.emoji) == emoji.poop:
+                for channel, chandata in [*self.channels.items()]:
+                    if channel.id == payload.channel_id:
+                        for message in (*chandata.pending, *chandata.history):
+                            if message.id == payload.message_id:
+                                await self.delmsg(message)
+                                break
+            else:
+                handler = self.on_reaction.get(payload.message_id)
+                if handler is not None:
+                    await handler(payload)
         return await super().on_raw_reaction_add(payload)
+    async def on_raw_reaction_remove(self, payload):
+        if payload.user_id != self.client.user.id:
+            handler = self.on_reaction.get(payload.message_id)
+            if handler is not None:
+                await handler(payload)
+        return await super().on_raw_reaction_remove(payload)
 
 #model = codesynth.ai21_jumbo()
 model = codesynth.multi_demo(codesynth.eleuther_demo(), codesynth.bellard_demo())

@@ -42,11 +42,11 @@ class emoji:
             emoji.name_by_unicode = {}
             for line in emoji_lines:
                 parts = line.split(';', 1)
-                emoji = parts[0].strip()
-                emoji = ''.join((chr(int(code, 16)) for code in emoji.split(' ')))
+                ucode = parts[0].strip()
+                ucode = ''.join((chr(int(code, 16)) for code in ucode.split(' ')))
                 name = parts[1].split('#')[-1]
                 name = name.split(' ', 3)[-1]
-                emoji.name_by_unicode[emoji] = name
+                emoji.name_by_unicode[ucode] = name
         import random
         return random.choice([*emoji.name_by_unicode.keys()])
     repeat = chr(0x1F501)

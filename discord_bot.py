@@ -14,6 +14,7 @@ import discord
 import json
 
 discord_token = os.environ['DISCORD_TOKEN']
+allow_exec = bool(os.environ.get('DISCORD_EXEC'))
 
 def list_randshrink(list, count):
     result = [item for item in list]
@@ -45,6 +46,7 @@ class emoji:
     thinking = chr(0x1F914)
     scissors = chr(0x2702)
     knife = chr(0x1F52A)
+    running = chr(0x1F3C3)
     thumbsup = '👍'
     thumbsdown = '👎'
     smiley = '😃'
@@ -64,7 +66,7 @@ class Channel:
 class PromptCtx:
     dir = os.path.abspath('ctxs')
     default_model_kwparams = dict(return_full_text=False, max_new_tokens=512)
-    default_local_kwparams = dict(append_delimeter=True, delimeter='\n')
+    default_local_kwparams = dict(append_delimiter=True, delimiter='\n', WARNING_DATA_IS_NOT_PRESERVED="WARNING DATA IS NOT PRESERVED")
 
     def __init__(self, ctx, prompt = '', **kwparams):
         pending_kwparams = {}
@@ -80,6 +82,8 @@ class PromptCtx:
         self.kwparams0.update(self.default_local_kwparams)
         self.prompt0 = ''
         self.last_filename = ''
+        state = {}
+        self.state0 = {}
         if not os.path.exists(self.path):
             os.makedirs(self.path, exist_ok=True)
         else:
@@ -89,9 +93,11 @@ class PromptCtx:
                 filename = files.pop()
                 filepath = os.path.join(self.path, filename)
                 try:
-                    kwparams, prompt = pickle.load(open(filepath, 'rb'))
+                    kwparams, prompt, state = pickle.load(open(filepath, 'rb'))
                     self.kwparams0 = {}
                     self.kwparams0.update(kwparams)
+                    self.state0 = {}
+                    self.state0.update(state)
                     self.prompt0 = prompt
                     self.last_filename = filename
                     break
@@ -99,6 +105,7 @@ class PromptCtx:
                     continue
         self.kwparams = kwparams
         self.prompt = prompt
+        self.state = state
     @property
     def model_kwparams(self):
         result = {}
@@ -113,13 +120,15 @@ class PromptCtx:
         return files
     @property
     def is_mutated(self):
-        return self.kwparams0 != self.kwparams or self.prompt0 != self.prompt
+        return self.kwparams0 != self.kwparams or self.prompt0 != self.prompt or self.state0 != self.state
     def load(self, filename):
         self.save()
         filepath = os.path.join(self.path, filename)
-        self.kwparams, self.prompt = pickle.load(open(filepath, 'rb'))
+        self.kwparams, self.prompt, self.state = pickle.load(open(filepath, 'rb'))
         self.kwparams0 = {}
         self.kwparams0.update(self.kwparams)
+        self.state0 = {}
+        self.state0.update(self.state)
         self.prompt0 = self.prompt
         self.last_filename = filename
     def save(self):
@@ -127,9 +136,11 @@ class PromptCtx:
             now = datetime.now().isoformat()
             filename = str(now) + '-' + self.ctx + '.pickle'
             filepath = os.path.join(self.path, filename)
-            pickle.dump((self.kwparams, self.prompt), open(filepath, 'wb'))
+            pickle.dump((self.kwparams, self.prompt, self.state), open(filepath, 'wb'))
             self.kwparams0 = {}
             self.kwparams0.update(self.kwparams)
+            self.state0 = {}
+            self.state0.update(self.state)
             self.prompt0 = self.prompt
             self.last_filename = filename
             return filename
@@ -138,9 +149,10 @@ class PromptCtx:
     def __del__(self):
         self.save()
     def kwparams2str(self):
-        return ' '.join((f'{key}={json.dumps(value)}' for key, value in self.kwparams.items() if key != 'append_delimeter' or self.kwparams.get('delimeter')))
+        return ' '.join((f'{key}={json.dumps(value)}' for key, value in self.kwparams.items() if key != 'append_delimiter' or self.kwparams.get('delimiter')))
     def str2kwparams(self, str):
         new_kwparams = {}
+        del_ = lambda: None
         str = str.strip()
         if len(str):
             for part in str.split(' '):
@@ -150,9 +162,16 @@ class PromptCtx:
                 else:
                     key, val = part.split('=', 1)
                     key = key.strip()
-                val =json.loads(val)
-                new_kwparams[key] = val
-        self.kwparams.update(new_kwparams)
+                if val == 'del':
+                    val = del_
+                else:
+                    val =json.loads(val)
+                    new_kwparams[key] = val
+        for key, val in new_kwparams.items():
+            if val is del_:
+                del self.kwparams[key]
+            else:
+                self.kwparams[key] = val
 
 
 class Bot:
@@ -467,11 +486,11 @@ class bot(Bot):
                         await self.reply_msg(message, ctx.kwparams2str() + '\n`' + ctx.prompt + '`')
                     elif cmd == "guess":
                         await message.add_reaction(emoji.thinking)
-                        if ctx.kwparams.get('delimeter'):
-                            if len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimeter']:
-                                content = ctx.kwparams['delimeter'] + content
-                        if ctx.kwparams['append_delimeter']:
-                            content += ctx.kwparams['delimeter']
+                        if ctx.kwparams.get('delimiter'):
+                            if len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimiter']:
+                                content = ctx.kwparams['delimiter'] + content
+                        if ctx.kwparams['append_delimiter']:
+                            content += ctx.kwparams['delimiter']
                         response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
                         sent = await self.reply_msg(message, response)
                         await message.remove_reaction(emoji.thinking, self.client.user)
@@ -479,6 +498,8 @@ class bot(Bot):
                         await sent.add_reaction(emoji.knife)
                         await sent.add_reaction(emoji.scissors)
                         await sent.add_reaction(emoji.repeat)
+                        if allow_exec:
+                            await sent.add_reaction(emoji.running)
                         await sent.add_reaction(emoji.poop)
                         async def handle(reaction_payload):
                             try:
@@ -492,7 +513,7 @@ class bot(Bot):
                                         await sent.edit(content=response)
                                         await sent.remove_reaction(emoji.thinking, self.client.user)
                                     elif str(reaction_payload.emoji) == emoji.scissors:
-                                        idx = sent.content.rfind(ctx.kwparams['delimeter'])
+                                        idx = sent.content.rfind(ctx.kwparams['delimiter'])
                                         if idx == -1:
                                             idx = sent.content.rfind('\n')
                                         if idx == -1:
@@ -502,7 +523,7 @@ class bot(Bot):
                                         if idx > 0:
                                             await sent.edit(content=sent.content[:idx])
                                     elif str(reaction_payload.emoji) == emoji.knife:
-                                        idx = sent.content.find(ctx.kwparams['delimeter'])
+                                        idx = sent.content.find(ctx.kwparams['delimiter'])
                                         if idx == -1:
                                             idx = sent.content.find('\n')
                                         if idx == -1:
@@ -511,6 +532,12 @@ class bot(Bot):
                                             idx = 0
                                         if idx >= 0:
                                             await sent.edit(content=sent.content[idx+1:])
+                                    elif str(reaction_payload.emoji) == emoji.running and allow_exec:
+                                        state0 = {}
+                                        state0.update(ctx.state)
+                                        exec(sent.content, {}, ctx.state)
+                                        result = str(ctx.state)
+                                        await self.reply_msg(sent, str(result))
                             except Exception as e:
                                 await self.reply_msg(sent, err2str(e))
                         self.on_reaction[sent.id] = handle
@@ -518,8 +545,8 @@ class bot(Bot):
                     #    ctx.prompt += content
                     #    await self.reply_msg(message, '... ' + ctx.prompt[-256:])
                     elif cmd == 'add':
-                        if ctx.kwparams.get('delimeter') and len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimeter']:
-                            ctx.prompt += ctx.kwparams['delimeter']
+                        if ctx.kwparams.get('delimiter') and len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimiter']:
+                            ctx.prompt += ctx.kwparams['delimiter']
                         ctx.prompt += content
                         await self.reply_msg(message, '... ' + ctx.prompt[-256:])
                     elif cmd == 'set':

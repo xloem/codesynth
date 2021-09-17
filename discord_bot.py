@@ -26,6 +26,9 @@ def asyncify(func):
         return asyncio.get_running_loop().run_in_executor(None, functools.partial(func, **kwparams), *params)
     return asynced
 
+def err2str(error):
+    return ''.join(traceback.format_exception(type(error), error, error.__traceback__))
+
 class emoji:
     _list = None
     def random():
@@ -245,7 +248,7 @@ class Bot:
                 channel.boringness = 0
             self.new_messages.set()
         except Exception as e:
-            print(*traceback.format_exception(type(e), e, e.__traceback__))
+            print(err2str(e))
         sys.stdout.flush()
 
     async def on_raw_reaction_add(self, payload):
@@ -384,7 +387,7 @@ class bot(Bot):
                             reply = '\n'.join(lines[:mark])
                     except Exception as e:
                         print(reply)
-                        reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                        reply = err2sr(e)
                     if len(reply) == 0:
                         reply = '[empty message??]'
                         print(reply)
@@ -478,35 +481,38 @@ class bot(Bot):
                         await sent.add_reaction(emoji.repeat)
                         await sent.add_reaction(emoji.poop)
                         async def handle(reaction_payload):
-                            if reaction_payload.user_id == message.author.id:
-                                if str(reaction_payload.emoji) == emoji.thumbsup:
-                                    ctx.prompt += content + response
-                                    await self.reply_msg('... ' + content + response, sent)
-                                elif str(reaction_payload.emoji) == emoji.repeat:
-                                    await sent.add_reaction(emoji.thinking)
-                                    response = (await asyncify(self.model)(ctx.prompt + content, **ctx.kwparams))[0]['generated_text']
-                                    await sent.edit(content=response)
-                                    await sent.remove_reaction(emoji.thinking, self.client.user)
-                                elif str(reaction_payload.emoji) == emoji.scissors:
-                                    idx = sent.content.rfind(ctx.kwparams['delimeter'])
-                                    if idx == -1:
-                                        idx = sent.content.rfind('\n')
-                                    if idx == -1:
-                                        idx = sent.content.rfind(' ')
-                                    if idx == -1:
-                                        idx = len(sent.content) - 1
-                                    if idx > 0:
-                                        await sent.edit(content=sent.content[:idx])
-                                elif str(reaction_payload.emoji) == emoji.knife:
-                                    idx = sent.content.find(ctx.kwparams['delimeter'])
-                                    if idx == -1:
-                                        idx = sent.content.find('\n')
-                                    if idx == -1:
-                                        idx = sent.content.find(' ')
-                                    if idx == -1 and len(sent.content) > 1:
-                                        idx = 0
-                                    if idx >= 0:
-                                        await sent.edit(content=sent.content[idx+1:])
+                            try:
+                                if reaction_payload.user_id == message.author.id:
+                                    if str(reaction_payload.emoji) == emoji.thumbsup:
+                                        ctx.prompt += content + sent.content
+                                        await self.reply_msg(sent, '... ' + content + sent.content)
+                                    elif str(reaction_payload.emoji) == emoji.repeat:
+                                        await sent.add_reaction(emoji.thinking)
+                                        response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
+                                        await sent.edit(content=response)
+                                        await sent.remove_reaction(emoji.thinking, self.client.user)
+                                    elif str(reaction_payload.emoji) == emoji.scissors:
+                                        idx = sent.content.rfind(ctx.kwparams['delimeter'])
+                                        if idx == -1:
+                                            idx = sent.content.rfind('\n')
+                                        if idx == -1:
+                                            idx = sent.content.rfind(' ')
+                                        if idx == -1:
+                                            idx = len(sent.content) - 1
+                                        if idx > 0:
+                                            await sent.edit(content=sent.content[:idx])
+                                    elif str(reaction_payload.emoji) == emoji.knife:
+                                        idx = sent.content.find(ctx.kwparams['delimeter'])
+                                        if idx == -1:
+                                            idx = sent.content.find('\n')
+                                        if idx == -1:
+                                            idx = sent.content.find(' ')
+                                        if idx == -1 and len(sent.content) > 1:
+                                            idx = 0
+                                        if idx >= 0:
+                                            await sent.edit(content=sent.content[idx+1:])
+                            except Exception as e:
+                                await self.reply_msg(sent, err2str(e))
                         self.on_reaction[sent.id] = handle
                     #elif cmd == 'join':
                     #    ctx.prompt += content
@@ -528,7 +534,8 @@ class bot(Bot):
                             ctx_src = self.ctxs.setdefault(content, PromptCtx(content))
                         if ctx.is_mutated:
                             ctx.save()
-                        ctx.kwparams = ctx_src.kwparams
+                        ctx.kwparams = {}
+                        ctx.kwparams.update(ctx_src.kwparams)
                         ctx.prompt = ctx_src.prompt
                         await self.reply_msg(message, ctx.kwparams2str())
                     elif cmd == 'save':
@@ -549,7 +556,7 @@ class bot(Bot):
                     else:
                         await self.reply_msg(message, 'cmds are dump guess params fork add set save list load')
             except Exception as e:
-                reply = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                reply = err2str(e)
                 print(reply)
                 await self.reply_msg(message, reply)
             return False

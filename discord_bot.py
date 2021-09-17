@@ -1,8 +1,10 @@
 import asyncio
 from collections import defaultdict
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
 import functools
+import io
 import os
 import pickle
 import random
@@ -136,7 +138,14 @@ class PromptCtx:
             now = datetime.now().isoformat()
             filename = str(now) + '-' + self.ctx + '.pickle'
             filepath = os.path.join(self.path, filename)
-            pickle.dump((self.kwparams, self.prompt, self.state), open(filepath, 'wb'))
+            state_for_saving = {}
+            for key, value in self.state.items():
+                try:
+                    pickle.dump(value)
+                    state_for_saving[key] = value
+                except:
+                    pass
+            pickle.dump((self.kwparams, self.prompt, state_for_saving), open(filepath, 'wb'))
             self.kwparams0 = {}
             self.kwparams0.update(self.kwparams)
             self.state0 = {}
@@ -492,7 +501,7 @@ class bot(Bot):
                         if ctx.kwparams['append_delimiter']:
                             content += ctx.kwparams['delimiter']
                         response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
-                        sent = await self.reply_msg(message, response)
+                        sent = await self.reply_msg(message, '`'+response+'`')
                         await message.remove_reaction(emoji.thinking, self.client.user)
                         await sent.add_reaction(emoji.thumbsup)
                         await sent.add_reaction(emoji.knife)
@@ -506,11 +515,12 @@ class bot(Bot):
                                 if reaction_payload.user_id == message.author.id:
                                     if str(reaction_payload.emoji) == emoji.thumbsup:
                                         ctx.prompt += content + sent.content
+                                        ctx.save()
                                         await self.reply_msg(sent, '... ' + content + sent.content)
                                     elif str(reaction_payload.emoji) == emoji.repeat:
                                         await sent.add_reaction(emoji.thinking)
                                         response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
-                                        await sent.edit(content=response)
+                                        await sent.edit(content='`'+response+'`')
                                         await sent.remove_reaction(emoji.thinking, self.client.user)
                                     elif str(reaction_payload.emoji) == emoji.scissors:
                                         idx = sent.content.rfind(ctx.kwparams['delimiter'])
@@ -521,7 +531,7 @@ class bot(Bot):
                                         if idx == -1:
                                             idx = len(sent.content) - 1
                                         if idx > 0:
-                                            await sent.edit(content=sent.content[:idx])
+                                            await sent.edit(content=sent.content[:idx] + '`')
                                     elif str(reaction_payload.emoji) == emoji.knife:
                                         idx = sent.content.find(ctx.kwparams['delimiter'])
                                         if idx == -1:
@@ -531,12 +541,18 @@ class bot(Bot):
                                         if idx == -1 and len(sent.content) > 1:
                                             idx = 0
                                         if idx >= 0:
-                                            await sent.edit(content=sent.content[idx+1:])
+                                            await sent.edit(content='`'+sent.content[idx+1:])
                                     elif str(reaction_payload.emoji) == emoji.running and allow_exec:
+                                        ctx.save()
                                         state0 = {}
                                         state0.update(ctx.state)
-                                        exec(sent.content, {}, ctx.state)
-                                        result = str(ctx.state)
+                                        stdout = io.StringIO()
+                                        with redirect_stdout(stdout):
+                                            exec(sent.content[1:-1], {}, ctx.state)
+                                        ctx.save()
+                                        result = stdout.getvalue()
+                                        if not len(result):
+                                            result = str(ctx.state)
                                         await self.reply_msg(sent, str(result))
                             except Exception as e:
                                 await self.reply_msg(sent, err2str(e))
@@ -574,6 +590,11 @@ class bot(Bot):
                             content = ctx.last_filename
                         ctx.load(content)
                         await self.reply_msg(message, ctx.kwparams2str())
+                    elif cmd == 'state':
+                        await self.reply_msg(message, str(ctx.state))
+                    elif cmd == 'clearstate':
+                        ctx.state = {}
+                        await self.reply_msg(message, str(ctx.state))
                     #elif cmd == 'addline':
                     #    if len(content) == 0:
                     #        content = message_replied.content
@@ -581,7 +602,7 @@ class bot(Bot):
                     #        ctx.prompt += 
                     #    ctx.prompt += 
                     else:
-                        await self.reply_msg(message, 'cmds are dump guess params fork add set save list load')
+                        await self.reply_msg(message, 'cmds are: dump guess params fork add set save list load state clearstate')
             except Exception as e:
                 reply = err2str(e)
                 print(reply)

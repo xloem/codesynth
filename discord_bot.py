@@ -71,6 +71,7 @@ class Channel:
         self.can_talk = False
         self.boringness = 0
         self.timemark = datetime.now()
+        self.ctx = None
 class PromptCtx:
     dir = os.path.abspath('ctxs')
     default_model_kwparams = dict(return_full_text=False, max_new_tokens=512)
@@ -90,6 +91,7 @@ class PromptCtx:
         self.kwparams0.update(self.default_local_kwparams)
         self.prompt0 = ''
         self.last_filename = ''
+        self.chandata = None
         state = {}
         self.state0 = {}
         if not os.path.exists(self.path):
@@ -607,6 +609,11 @@ class bot(Bot):
                     elif cmd == 'clearstate':
                         ctx.state = {}
                         await self.reply_msg(message, str(ctx.state))
+                    elif cmd == 'channel':
+                        chandata = self.channels.setdefault(message.channel, Channel(message.channel))
+                        chandata.ctx = ctx
+                        ctx.chandata = chandata
+                        await self.reply_msg(message, str(channel))
                     #elif cmd == 'addline':
                     #    if len(content) == 0:
                     #        content = message_replied.content
@@ -614,7 +621,7 @@ class bot(Bot):
                     #        ctx.prompt += 
                     #    ctx.prompt += 
                     else:
-                        await self.reply_msg(message, 'cmds are: dump guess params fork add set save list load state clearstate')
+                        await self.reply_msg(message, 'cmds are: dump guess params fork add set save list load state clearstate channel')
             except Exception as e:
                 reply = err2str(e)
                 print(reply)

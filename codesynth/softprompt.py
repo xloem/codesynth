@@ -5,12 +5,12 @@ import torch
 class ConstantWarmupLR(torch.optim.lr_scheduler._LRScheduler):
     '''Applies a constant warmup learning rate.  Should be last in chain to override other learning rates.'''
     def __init__(self, optimizer, epochs = 1, lr = 1e-5):
-        super().__init__(optimizer)
         self.epochs = epochs
         self.lr = lr
+        super().__init__(optimizer)
     def get_lr(self):
         if self.last_epoch <= self.epochs:
-            return [self.lr for base_lr in self.baselrs]
+            return [self.lr for base_lr in self.base_lrs]
         else:
             return self.baselrs
             
@@ -38,7 +38,7 @@ class SoftPromptTrainable:
     
         for param in self.model.parameters():
             param.requires_grad_(False)
-        self.embeds = torch.tensor([])
+        self.embeds = torch.empty((0,0))
         self.param = torch.nn.Parameter(self.embeds)
 
         self.num_embeds = num_embeds
@@ -87,7 +87,7 @@ class SoftPromptTrainable:
 
     def forward_and_backward(self, requested_outputs, *params, **kwparams):
         # stretch embeddings to include the requested outputs
-        embeds = torch.cat([self.embeds.expand(requested_outputs.shape[0]), self.model.wte(requested_outputs)])
+        embeds = torch.cat([self.embeds.expand(requested_outputs.shape[0]), self.wte(requested_outputs)])
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
 
@@ -123,10 +123,13 @@ class SoftPromptTrainable:
 
     @property
     def vocab_size(self):
-        return self.model.wte.num_embeddings
+        return self.wte.num_embeddings
     @property
     def embed_dim(self):
-        return self.model.wte.embedding_dim
+        return self.wte.embedding_dim
+    @property
+    def wte(self):
+        return self.model.transformer.wte
     @property
     def num_embeds(self):
         return self.embeds.shape[0]
@@ -134,12 +137,15 @@ class SoftPromptTrainable:
     def num_embeds(self, num_embeds):
         self.param.requires_grad_(False)
         prev_embeds = self.embeds
-        self.embeds = self.model.transformer.wte(torch.empty(num_embeds))
+        self.embeds = self.wte(torch.zeros(num_embeds, dtype=torch.int))
         copy_len = min(len(prev_embeds), num_embeds)
-        self.embeds[-copy_len:] = prev_embeds
+        if copy_len:
+            self.embeds[-copy_len:] = prev_embeds[-copy_len:]
         self.param = torch.nn.Parameter(self.embeds)
 
-        self.optim = self._optimizer_class(**self._optimizer_params)
+        # might be able to mutate the parameter list live an dnot recreate the optimizers,
+        # don't know
+        self.optim = self._optimizer_class([self.param], **self._optimizer_params)
         self.scheds = [
             cls(self.optim, **params)
             for cls, params in self._lr_schedulers
@@ -147,9 +153,12 @@ class SoftPromptTrainable:
     # could add a discretization step where loss is multiplied by distance of embeddings from token ids
     def randomize_embeds(self):
         with torch.no_grad():
-            torch.nn.init.uniform_(0, self.model.vocab_size)
+            # sampling from embedding space might be better but unsure how to quickly find its bounds
+            token_ids = torch.empty(self.num_embeds)
+            torch.nn.init.uniform_(token_ids, 0, self.vocab_size)
+            self.embeds[:] = self.wte(token_ids.to(torch.int))
     def set_input_ids(self, input_ids):
-        return self.set_embeds(self.model.transformer.wte(input_ids))
+        return self.set_embeds(self.wte(input_ids))
     def set_embeds(self, embeds):
         if len(embeds) != self.num_embeds:
             self.num_embeds = len(embeds)

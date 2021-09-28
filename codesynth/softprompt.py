@@ -29,6 +29,7 @@ class SoftPromptTrainable:
         ],
     ):
         self.model = model
+        self._training = None
 
         self._optimizer_class = optimizer
         self._optimizer_params = optimizer_params
@@ -49,16 +50,76 @@ class SoftPromptTrainable:
             # cosine is simple annealing with max epoch = (200,50)
             # constant warmup has the epoch and learning rare
 
-    def step(self, *params, **kwparams):
+    #def step(self, *params, **kwparams):
+    #    self.optim.zero_grad()
+    #    output = self.model(*params, inputs_embeds=self.embeds, **kwparams)
+    #    # really we want to process every token, so loss would go in the callback
+    #    loss = loss_fn(output, target)
+    #    loss.backward()
+    #    self.optim.step()
+    #    # call after batch
+    #    for sched in self.scheds:
+    #        sched.step()
+
+    def save_embeds(self, filename):
+        torch.save(self.embeds, filename)
+
+    def load_embeds(self, filename):
+        self.set_embeds(torch.load(filename))
+
+    def eval(self):
+        self._training = False
+        self.model.eval()
+        return self.model
+
+    def __enter__(self, *params):
+        if self._training is not True:
+            self.model.train()
+            self._training = True
         self.optim.zero_grad()
-        output = self.model(*params, inputs_embeds=self.embeds, **kwparams)
-        # really we want to process every token, so loss would go in the callback
-        loss = loss_fn(output, target)
-        loss.backward()
+        self.model.zero_grad()
+        return self
+
+    def __exit__(self, *params):
         self.optim.step()
-        # call after batch
         for sched in self.scheds:
             sched.step()
+
+    def forward_and_backward(self, requested_outputs, *params, **kwparams):
+        # stretch embeddings to include the requested outputs
+        embeds = torch.cat([self.embeds.expand(requested_outputs.shape[0]), self.model.wte(requested_outputs)])
+        
+        # labels are compared with the full text.  a value of -100 is supposed to be ignored.
+
+        #  didn't find where -100 was respected in the source yet, so below draft is replaced with manual loss
+        #labels = torch.cat([torch.full(self.embeds.shape,-100), requested_outputs], dim=1)
+        #outputs = self.model(*params, inputs_embeds=self.embeds, labels=requested_outputs, **kwparams)
+        #loss, logits = outputs[:2]
+
+        # manual loss
+        logits, *_ = self.model(*params, inputs_embeds=self.embeds, labels=None, return_dict=False, **kwparams)
+        shift_logits = logits[..., self.num_embeds:-1, :].contiguous()
+        loss = torch.nn.CrossEntropyLoss()(shift_logits.view(-1, shift_logits.size(-1)), requested_outputs.view(-1))
+
+        loss.backward()
+        return loss
+
+    def epoch(self, requested_outputs, chunksize=16, *params, **kwparams):
+        loss_sum = 0
+
+        # atm batch size (data between model updates) is equated to epoch size (full data pass)
+
+        with self: # enter batch
+            for subrange in range(0, requested_outputs.shape[0], size): # cross epoch in chunks
+                chunk = requested_outputs[subrange:subrange+size]
+                loss_sum += self.forward_and_backward(chunk, *params, **kwparams)
+        return loss_sum
+
+    def __call__(self, *params, **kwparams):
+        if self._training is not False:
+            self.model.eval()
+            self._training = False
+        return self.model(*params, **kwparams)
 
     @property
     def vocab_size(self):
@@ -86,7 +147,10 @@ class SoftPromptTrainable:
     def randomize_embeds(self):
         with torch.no_grad():
             torch.nn.init.uniform_(0, self.model.vocab_size)
-    def set_embeds(self, input_ids):
-        self.randomize_embeds():
-        self.embeds[-len(input_ids):] = self.model.wte(input_ids)
-    
+    def set_input_ids(self, input_ids):
+        return self.set_embeds(self.model.wte(input_ids))
+    def set_embeds(self, embeds):
+        if len(embeds) != self.num_embeds:
+            self.num_embeds = len(embeds)
+        with torch.no_grad():
+            self.embeds[:] = embeds

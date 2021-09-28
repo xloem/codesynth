@@ -12,7 +12,7 @@ class ConstantWarmupLR(torch.optim.lr_scheduler._LRScheduler):
         if self.last_epoch <= self.epochs:
             return [self.lr for base_lr in self.base_lrs]
         else:
-            return self.baselrs
+            return self.base_lrs
             
 
 # can get embeddings from tokens with model.wte(input_ids)
@@ -38,11 +38,18 @@ class SoftPromptTrainable:
     
         for param in self.model.parameters():
             param.requires_grad_(False)
-        self.embeds = torch.empty((0,0))
+        self.embeds = torch.empty((0,0), device=self.model.device)
         self.param = torch.nn.Parameter(self.embeds)
 
         self.num_embeds = num_embeds
         self.randomize_embeds()
+
+        wrapped_prepare_inputs_for_generation = model.prepare_inputs_for_generation
+        def prepare_inputs_for_generation_wrapper(*params, **kwparams):
+            result = wrapped_prepare_inputs_for_generation(*params, **kwparams)
+            del result['input_ids']
+            result['inputs_embeds'] = self.embeds
+            return result
 
         # the first example used SGD with an LR of 0.002, and 50 or 200 epochs.
         # used an LR scheduler 'cosine', with a single constant warmup epoch with an LR of 1e-5
@@ -82,29 +89,53 @@ class SoftPromptTrainable:
 
     def forward_and_backward(self, requested_outputs, *params, **kwparams):
         # stretch embeddings to include the requested outputs
-        embeds = torch.cat([self.embeds.expand(requested_outputs.shape[0], *self.embeds.shape), self.wte(requested_outputs)], dim=1)
+        embeds = torch.cat([self.param.expand(requested_outputs.shape[0], *self.param.shape), self.wte(requested_outputs)], dim=1)
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
 
         #  didn't find where -100 was respected in the source yet, so below draft is replaced with manual loss
-        #labels = torch.cat([torch.full(self.embeds.shape,-100), requested_outputs], dim=1)
+        #labels = torch.cat([torch.full(self.embeds.shape,-100, device=self.model.device), requested_outputs], dim=1)
         #outputs = self.model(*params, inputs_embeds=self.embeds, labels=requested_outputs, **kwparams)
         #loss, logits = outputs[:2]
 
         # manual loss
         logits, *_ = self.model(*params, inputs_embeds=embeds, labels=None, return_dict=False, **kwparams)
         shift_logits = logits[..., self.num_embeds-1:-1, :].contiguous()
-        loss = torch.nn.CrossEntropyLoss()(shift_logits.view(-1, shift_logits.size(-1)), requested_outputs.view(-1))
+        loss = torch.nn.functional.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), requested_outputs.view(-1))
 
         loss.backward()
-        return loss
+        return loss.detach()
+
+    def find_chunksize_for_data(self, requested_outputs, *params, **kwparams):
+        self.forward_and_backward(requested_outputs[:1], *params, **kwparams)
+        try:
+            self.forward_and_backward(requested_outputs, *params, **kwparams)
+            return requested_outputs.shape[0]
+        except:
+            pass
+        low = 1
+        high = requested_outputs.shape[0]
+        while low + 1 < high:
+            mid = (low + high) // 2
+            if mid == low:
+                mid += 1
+            if mid == high:
+                mid -= 1
+            try:
+                self.forward_and_backward(requested_outputs[:mid], *params, **kwparams)
+                low = mid
+            except:
+                high = mid
+        return low
 
     def epoch(self, requested_outputs, chunksize=16, *params, verbose = False, **kwparams):
         loss_sum = 0
+        chunks = 0
 
+        range_iter = range(0, requested_outputs.shape[0], chunksize)
         if verbose:
             import tqdm
-            range = tqdm.trange
+            range_iter = tqdm.tqdm(range_iter, leave=False, desc='chunk')
 
         # atm batch size (data between model updates) is equated to epoch size (full data pass)
 
@@ -112,13 +143,19 @@ class SoftPromptTrainable:
             for subrange in range(0, requested_outputs.shape[0], chunksize): # cross epoch in chunks
                 chunk = requested_outputs[subrange:subrange+chunksize]
                 loss_sum += self.forward_and_backward(chunk, *params, **kwparams)
-        return loss_sum
+                chunks += 1
+        return loss_sum / chunks
 
-    def __call__(self, input_ids = None, *params, **kwparams):
+    def __call__(self, input_ids = None, attention_mask = None, **kwparams):
         if self._training is not False:
             self.model.eval()
             self._training = False
-        return self.model(*params, inputs_embeds=self.embeds, **kwparams)
+        return self.model(inputs_embeds=self.embeds,**kwparams)
+    def generate(self, input_ids = None, **kwparams):
+        if self._training is not False:
+            self.model.eval()
+            self._training = False
+        return self.model.generate(input_ids = torch.zeros(1, self.num_embeds, dtype=torch.int, device=self.model.device), **kwparams)
 
     @property
     def vocab_size(self):
@@ -136,7 +173,7 @@ class SoftPromptTrainable:
     def num_embeds(self, num_embeds):
         self.param.requires_grad_(False)
         prev_embeds = self.embeds
-        self.embeds = self.wte(torch.zeros(num_embeds, dtype=torch.int))
+        self.embeds = self.wte(torch.zeros(num_embeds, dtype=torch.int, device=self.model.device))
         copy_len = min(len(prev_embeds), num_embeds)
         if copy_len:
             self.embeds[-copy_len:] = prev_embeds[-copy_len:]
@@ -153,7 +190,7 @@ class SoftPromptTrainable:
     def randomize_embeds(self):
         with torch.no_grad():
             # sampling from embedding space might be better but unsure how to quickly find its bounds
-            token_ids = torch.empty(self.num_embeds)
+            token_ids = torch.empty(self.num_embeds, device=self.model.device)
             torch.nn.init.uniform_(token_ids, 0, self.vocab_size)
             self.embeds[:] = self.wte(token_ids.to(torch.int))
     def set_input_ids(self, input_ids):

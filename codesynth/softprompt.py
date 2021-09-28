@@ -29,6 +29,8 @@ class SoftPromptTrainable:
         ],
     ):
         self.model = model
+        if hasattr(self.model, 'config'):
+            self.config = self.model.config
         self._training = None
 
         self._optimizer_class = optimizer
@@ -44,12 +46,13 @@ class SoftPromptTrainable:
         self.num_embeds = num_embeds
         self.randomize_embeds()
 
-        wrapped_prepare_inputs_for_generation = model.prepare_inputs_for_generation
-        def prepare_inputs_for_generation_wrapper(*params, **kwparams):
-            result = wrapped_prepare_inputs_for_generation(*params, **kwparams)
-            del result['input_ids']
-            result['inputs_embeds'] = self.embeds
-            return result
+        #wrapped_prepare_inputs_for_generation = model.prepare_inputs_for_generation
+        #def prepare_inputs_for_generation_wrapper(*params, **kwparams):
+        #    result = wrapped_prepare_inputs_for_generation(*params, **kwparams)
+        #    del result['input_ids']
+        #    result['inputs_embeds'] = self.embeds
+        #    return result
+        #expand_inputs_for_generation = model.
 
         # the first example used SGD with an LR of 0.002, and 50 or 200 epochs.
         # used an LR scheduler 'cosine', with a single constant warmup epoch with an LR of 1e-5
@@ -88,8 +91,8 @@ class SoftPromptTrainable:
             sched.step()
 
     def forward_and_backward(self, requested_outputs, *params, **kwparams):
-        # stretch embeddings to include the requested outputs
-        embeds = torch.cat([self.param.expand(requested_outputs.shape[0], *self.param.shape), self.wte(requested_outputs)], dim=1)
+        # stretch embeddings to include the requested outputs, minus one token for the shift
+        embeds = torch.cat([self.param.expand(requested_outputs.shape[0], *self.param.shape), self.wte(requested_outputs[:,:-1])], dim=1)
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
 
@@ -99,9 +102,9 @@ class SoftPromptTrainable:
         #loss, logits = outputs[:2]
 
         # manual loss
-        logits, *_ = self.model(*params, inputs_embeds=embeds, labels=None, return_dict=False, **kwparams)
-        shift_logits = logits[..., self.num_embeds-1:-1, :].contiguous()
-        loss = torch.nn.functional.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), requested_outputs.view(-1))
+        logits = self.model(*params, inputs_embeds=embeds, labels=None, return_dict=False, **kwparams)[0]
+        logits = logits[:, self.num_embeds-1:, :].contiguous()
+        loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), requested_outputs.view(-1))
 
         loss.backward()
         return loss.detach()
@@ -151,11 +154,28 @@ class SoftPromptTrainable:
             self.model.eval()
             self._training = False
         return self.model(inputs_embeds=self.embeds,**kwparams)
-    def generate(self, input_ids = None, **kwparams):
+
+    #def generate(self, input_ids = None, **kwparams):
+    #    # generate is a little confusing because ew have embeds, huggingface assumes running token ids, and token ids are produced as output (not embeds)
+    #    # if we are producing our own output, we'd havce to decide how much
+    #    if self._training is not False:
+    #        self.model.eval()
+    #        self._training = False
+    #    return self.model.generate(input_ids = torch.zeros(1, self.num_embeds, dtype=torch.int, device=self.model.device), **kwparams)
+    def generate_tokens(self, **kwparams):
         if self._training is not False:
             self.model.eval()
             self._training = False
-        return self.model.generate(input_ids = torch.zeros(1, self.num_embeds, dtype=torch.int, device=self.model.device), **kwparams)
+        running_embeds = self.embeds.clone().detach()
+        idx = 0
+        while True:
+            new_tokens = torch.argmax(self.model(inputs_embeds = running_embeds, **kwparams)[0][idx:], dim=-1)
+            yield from new_tokens
+            idx += new_tokens.shape[0]
+            running_embeds = torch.cat([running_embeds, self.wte(new_tokens)])
+    def array_tokens(self, len, **kwparams):
+        return [token for token, idx in zip(self.generate_tokens(**kwparams), range(len))]
+            
 
     @property
     def vocab_size(self):

@@ -8,3 +8,6 @@
 [submodule "extern/StellaAthena/transformers"]
 	path = extern/StellaAthena/transformers
 	url = https://github.com/StellaAthena/transformers.git
+[submodule "extern/deepmind/deepmind-research"]
+	path = extern/deepmind/deepmind-research
+	url = https://github.com/deepmind/deepmind-research.git

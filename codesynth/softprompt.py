@@ -10,7 +10,7 @@ class ConstantWarmupLR(torch.optim.lr_scheduler._LRScheduler):
         self.lr = lr
     def get_lr(self):
         if self.last_epoch <= self.epochs:
-            return [self.lr for base_lr in self.baselrs)]
+            return [self.lr for base_lr in self.baselrs]
         else:
             return self.baselrs
             
@@ -38,7 +38,7 @@ class SoftPromptTrainable:
     
         for param in self.model.parameters():
             param.requires_grad_(False)
-        self.embeds = Torch.tensor([])
+        self.embeds = torch.tensor([])
         self.param = torch.nn.Parameter(self.embeds)
 
         self.num_embeds = num_embeds
@@ -127,28 +127,29 @@ class SoftPromptTrainable:
     @property
     def embed_dim(self):
         return self.model.wte.embedding_dim
-    @property:
+    @property
     def num_embeds(self):
         return self.embeds.shape[0]
-    @nembeds.setter
-    def num_embeds(self, value):
+    @num_embeds.setter
+    def num_embeds(self, num_embeds):
         self.param.requires_grad_(False)
         prev_embeds = self.embeds
-        self.embeds = self.model.wte(torch.empty(num_embeds))
+        self.embeds = self.model.transformer.wte(torch.empty(num_embeds))
         copy_len = min(len(prev_embeds), num_embeds)
         self.embeds[-copy_len:] = prev_embeds
         self.param = torch.nn.Parameter(self.embeds)
 
         self.optim = self._optimizer_class(**self._optimizer_params)
         self.scheds = [
-            cls(self.optim, **params),
+            cls(self.optim, **params)
             for cls, params in self._lr_schedulers
         ]
+    # could add a discretization step where loss is multiplied by distance of embeddings from token ids
     def randomize_embeds(self):
         with torch.no_grad():
             torch.nn.init.uniform_(0, self.model.vocab_size)
     def set_input_ids(self, input_ids):
-        return self.set_embeds(self.model.wte(input_ids))
+        return self.set_embeds(self.model.transformer.wte(input_ids))
     def set_embeds(self, embeds):
         if len(embeds) != self.num_embeds:
             self.num_embeds = len(embeds)

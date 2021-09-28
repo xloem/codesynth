@@ -67,11 +67,6 @@ class SoftPromptTrainable:
     def load_embeds(self, filename):
         self.set_embeds(torch.load(filename))
 
-    def eval(self):
-        self._training = False
-        self.model.eval()
-        return self.model
-
     def __enter__(self, *params):
         if self._training is not True:
             self.model.train()
@@ -87,7 +82,7 @@ class SoftPromptTrainable:
 
     def forward_and_backward(self, requested_outputs, *params, **kwparams):
         # stretch embeddings to include the requested outputs
-        embeds = torch.cat([self.embeds.expand(requested_outputs.shape[0]), self.wte(requested_outputs)])
+        embeds = torch.cat([self.embeds.expand(requested_outputs.shape[0], *self.embeds.shape), self.wte(requested_outputs)], dim=1)
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
 
@@ -97,29 +92,33 @@ class SoftPromptTrainable:
         #loss, logits = outputs[:2]
 
         # manual loss
-        logits, *_ = self.model(*params, inputs_embeds=self.embeds, labels=None, return_dict=False, **kwparams)
-        shift_logits = logits[..., self.num_embeds:-1, :].contiguous()
+        logits, *_ = self.model(*params, inputs_embeds=embeds, labels=None, return_dict=False, **kwparams)
+        shift_logits = logits[..., self.num_embeds-1:-1, :].contiguous()
         loss = torch.nn.CrossEntropyLoss()(shift_logits.view(-1, shift_logits.size(-1)), requested_outputs.view(-1))
 
         loss.backward()
         return loss
 
-    def epoch(self, requested_outputs, chunksize=16, *params, **kwparams):
+    def epoch(self, requested_outputs, chunksize=16, *params, verbose = False, **kwparams):
         loss_sum = 0
+
+        if verbose:
+            import tqdm
+            range = tqdm.trange
 
         # atm batch size (data between model updates) is equated to epoch size (full data pass)
 
         with self: # enter batch
-            for subrange in range(0, requested_outputs.shape[0], size): # cross epoch in chunks
-                chunk = requested_outputs[subrange:subrange+size]
+            for subrange in range(0, requested_outputs.shape[0], chunksize): # cross epoch in chunks
+                chunk = requested_outputs[subrange:subrange+chunksize]
                 loss_sum += self.forward_and_backward(chunk, *params, **kwparams)
         return loss_sum
 
-    def __call__(self, *params, **kwparams):
+    def __call__(self, input_ids = None, *params, **kwparams):
         if self._training is not False:
             self.model.eval()
             self._training = False
-        return self.model(*params, **kwparams)
+        return self.model(*params, inputs_embeds=self.embeds, **kwparams)
 
     @property
     def vocab_size(self):

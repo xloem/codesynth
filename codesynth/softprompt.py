@@ -166,14 +166,9 @@ class SoftPromptTrainable:
                 high = mid
         return low
 
-    def epoch(self, pad_token_id, requested_outputs, chunksize=16, *params, verbose = False, **kwparams):
+    def epoch(self, pad_token_id, requested_outputs, chunksize=16, *params, **kwparams):
         loss_sum = 0
         chunks = 0
-
-        range_iter = range(0, requested_outputs.shape[0], chunksize)
-        if verbose:
-            import tqdm
-            range_iter = tqdm.tqdm(range_iter, leave=False, desc='chunk')
 
         # atm batch size (data between model updates) is equated to epoch size (full data pass)
 
@@ -233,10 +228,19 @@ class SoftPromptTrainable:
     def num_embeds(self, num_embeds):
         self.param.requires_grad_(False)
         prev_embeds = self.embeds
-        self.embeds = self.wte(torch.zeros(num_embeds, dtype=torch.int, device=self.model.device))
+
         copy_len = min(len(prev_embeds), num_embeds)
+
+        self.embeds = torch.empty((num_embeds, self.embed_dim), device=self.model.device)
+
+        if copy_len < num_embeds:
+            rand_tokens = torch.empty(num_embeds - copy_len, device=self.model.device)
+            torch.nn.init.uniform_(rand_tokens, 0, self.vocab_size)
+            self.embeds[:num_embeds-copy_len] = self.wte(rand_tokens.to(torch.int))
+
         if copy_len:
             self.embeds[-copy_len:] = prev_embeds[-copy_len:]
+
         self.param = torch.nn.Parameter(self.embeds)
 
         # might be able to mutate the parameter list live an dnot recreate the optimizers,
@@ -246,7 +250,6 @@ class SoftPromptTrainable:
             cls(self.optim, **params)
             for cls, params in self._lr_schedulers
         ]
-    # could add a discretization step where loss is multiplied by distance of embeddings from token ids
     def randomize_embeds(self):
         with torch.no_grad():
             # sampling from embedding space might be better but unsure how to quickly find its bounds

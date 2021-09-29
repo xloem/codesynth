@@ -1,0 +1,15 @@
+approaches:
+   - consider probability of desired output rather than crossentropy, so a path can be found from distant tokens
+   - thinking of weighting near token-based answers based on distance to embeds
+
+n-dimensional voronoi:
+   - consider the nearest point, and form its near neighbors
+     - enumerate all points
+       - for each point, enumerate other candidates.
+          subtract origin point from each candidate's location to make a vector
+	  consider selfdot(t * point - point) = selfdot(t * point - candidate)
+	  the summation should be pullable out of the dot, so that t can be solved for readily
+	  t is the percentage of distance to the point it takes to be equidistant to the candidate
+	  if t < 1, then equidistance is reached before the point, and i think that means the candidate is a better neighbor than the point, and the point can be discarded
+	  if t > 1 that might mean the candidate should be checked for discarding from this one
+	  if t < 0 i think that means the two are in opposite directions and they shouldn't have been tested because their dot product was negative

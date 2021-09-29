@@ -98,7 +98,7 @@ class SoftPromptTrainable:
         for sched in self.scheds:
             sched.step()
 
-    def forward_and_backward(self, requested_outputs, *params, **kwparams):
+    def forward_and_backward(self, pad_token_id, requested_outputs, *params, **kwparams):
         # stretch embeddings to include the requested outputs, minus one token for the shift
         embeds = torch.cat([self.param.expand(requested_outputs.shape[0], *self.param.shape), self.wte(requested_outputs[:,:-1])], dim=1)
         
@@ -114,7 +114,7 @@ class SoftPromptTrainable:
         logits = self.model(*params, inputs_embeds=embeds, labels=None, return_dict=False, **kwparams)[0]
         logits = logits[:, self.num_embeds-1:, :].contiguous()
             # todo? a weight could optionally be multiplied in for each requested output
-        loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), requested_outputs.view(-1))
+        loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), requested_outputs.view(-1), ignore_index = pad_token_id)
 
         # hardness provides for embeddinss to be trained to match tokens
         if self.hardness:
@@ -149,9 +149,9 @@ class SoftPromptTrainable:
         return loss.detach()
 
     def find_chunksize_for_data(self, requested_outputs, *params, **kwparams):
-        self.forward_and_backward(requested_outputs[:1], *params, **kwparams)
+        self.forward_and_backward(-100, requested_outputs[:1], *params, **kwparams)
         try:
-            self.forward_and_backward(requested_outputs, *params, **kwparams)
+            self.forward_and_backward(-100, requested_outputs, *params, **kwparams)
             return requested_outputs.shape[0]
         except:
             pass
@@ -164,13 +164,13 @@ class SoftPromptTrainable:
             if mid == high:
                 mid -= 1
             try:
-                self.forward_and_backward(requested_outputs[:mid], *params, **kwparams)
+                self.forward_and_backward(-100, requested_outputs[:mid], *params, **kwparams)
                 low = mid
             except:
                 high = mid
         return low
 
-    def epoch(self, requested_outputs, chunksize=16, *params, verbose = False, **kwparams):
+    def epoch(self, pad_token_id, requested_outputs, chunksize=16, *params, verbose = False, **kwparams):
         loss_sum = 0
         chunks = 0
 
@@ -184,7 +184,7 @@ class SoftPromptTrainable:
         with self: # enter batch
             for subrange in range(0, requested_outputs.shape[0], chunksize): # cross epoch in chunks
                 chunk = requested_outputs[subrange:subrange+chunksize]
-                loss_sum += self.forward_and_backward(chunk, *params, **kwparams)
+                loss_sum += self.forward_and_backward(pad_token_id, chunk, *params, **kwparams)
                 chunks += 1
         return loss_sum / chunks
 

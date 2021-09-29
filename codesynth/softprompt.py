@@ -23,12 +23,18 @@ class SoftPromptTrainable:
         num_embeds = 128,
         optimizer = torch.optim.SGD,
         optimizer_params = dict(lr=0.002),
+        hardness = 0, # weighting for nearness to real token ids, can be changed later
+        hardness_lite = True, # only measures gradients to nearest vocab word
+        hardness_cpu = True, # calculates distances to all vocab words on cpu, saves vram, but doesn't make use of gpu
         lr_schedulers = [
-            (torch.optim.lr_scheduler.CosineAnnealingLR, dict(T_max=200)),
+            (torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, dict(T_0=50)),
             (ConstantWarmupLR, dict()),
         ],
     ):
         self.model = model
+        self.hardness = hardness
+        self.hardness_lite = hardness_lite
+        self.hardness_cpu = hardness_cpu
         if hasattr(self.model, 'config'):
             self.config = self.model.config
         self._training = None
@@ -98,7 +104,8 @@ class SoftPromptTrainable:
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
 
-        #  didn't find where -100 was respected in the source yet, so below draft is replaced with manual loss
+        #  i did loss manually because i couldn't find where -100 was handled when verifying control flow.
+        #  it's handled in cross_entropy.  so it should be fine to use huggingface's training mechanism by the debugging below
         #labels = torch.cat([torch.full(self.embeds.shape,-100, device=self.model.device), requested_outputs], dim=1)
         #outputs = self.model(*params, inputs_embeds=self.embeds, labels=requested_outputs, **kwparams)
         #loss, logits = outputs[:2]
@@ -106,7 +113,37 @@ class SoftPromptTrainable:
         # manual loss
         logits = self.model(*params, inputs_embeds=embeds, labels=None, return_dict=False, **kwparams)[0]
         logits = logits[:, self.num_embeds-1:, :].contiguous()
+            # todo? a weight could optionally be multiplied in for each requested output
         loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), requested_outputs.view(-1))
+
+        # hardness provides for embeddinss to be trained to match tokens
+        if self.hardness:
+            embeds = self.embeds if self.hardness_lite else self.param
+            vocab = self.wte.weight
+            if self.hardness_cpu:
+                embeds = embeds.cpu()
+                vocab = vocab.cpu()
+
+            # vector cross difference
+            embed_vocab_distances = (
+                # embeds rows
+                embeds.expand(self.vocab_size, *self.param.shape) -
+                # vocab cols
+                vocab.expand(self.num_embeds, *vocab.shape).permute(1, 0, 2)
+            )
+            # self-dot makes squared distance
+            embed_vocab_distances = (embed_vocab_distances * embed_vocab_distances).sum(dim=-1)
+
+            # consider only the distance of each embed to the nearest vocab word
+            nearest_vocab_words = embed_vocab_distances.min(dim=0)
+
+            if self.hardness_lite:
+                embed_vocab_distances = self.wte.weight[nearest_vocab_words.indices] - self.param
+                embed_vocab_distances = (embed_vocab_distances * embed_vocab_distances).sum(dim=-1)
+            else:
+                embed_vocab_distances = nearest_vocab_words.values
+
+            loss += self.hardness * embed_vocab_distances.mean()
 
         loss.backward()
         return loss.detach()

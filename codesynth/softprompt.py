@@ -207,6 +207,11 @@ class SoftPromptTrainable:
             self._training = False
         running_embeds = self.embeds.clone().detach()
         idx = 0
+
+        # first yield the closest token to the first embedding, which the model won't output
+        dists = (self.wte.weight * self.embeds.expand(self.wte.weight.shape[0], self.embed_dim)).sum(dim=-1)
+        yield torch.argmax(dists)
+
         while True:
             new_tokens = torch.argmax(self.model(inputs_embeds = running_embeds, **kwparams)[0][idx:], dim=-1)
             yield from new_tokens

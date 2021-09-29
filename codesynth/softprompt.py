@@ -72,7 +72,9 @@ class SoftPromptTrainable:
     #        sched.step()
 
     def save_embeds(self, filename):
-        torch.save(self.embeds, filename)
+        import os
+        torch.save(self.embeds, filename + '.new')
+        os.rename(filename + '.new', filename)
 
     def load_embeds(self, filename):
         self.set_embeds(torch.load(filename))
@@ -172,7 +174,7 @@ class SoftPromptTrainable:
             new_tokens = torch.argmax(self.model(inputs_embeds = running_embeds, **kwparams)[0][idx:], dim=-1)
             yield from new_tokens
             idx += new_tokens.shape[0]
-            running_embeds = torch.cat([running_embeds, self.wte(new_tokens)])
+            running_embeds = torch.cat([running_embeds, self.wte(new_tokens[-1:])])
     def array_tokens(self, len, **kwparams):
         return [token for token, idx in zip(self.generate_tokens(**kwparams), range(len))]
             

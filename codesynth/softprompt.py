@@ -24,8 +24,7 @@ class SoftPromptTrainable:
         optimizer = torch.optim.SGD,
         optimizer_params = dict(lr=0.002),
         hardness = 0, # weighting for nearness to real token ids, can be changed later
-        hardness_lite = True, # only measures gradients to nearest vocab word
-        hardness_cpu = True, # calculates distances to all vocab words on cpu, saves vram, but doesn't make use of gpu
+        hardness_lite = True, # only measures gradients for each embed to one vocab word
         lr_schedulers = [
             (torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, dict(T_0=50)),
             (ConstantWarmupLR, dict()),
@@ -34,7 +33,6 @@ class SoftPromptTrainable:
         self.model = model
         self.hardness = hardness
         self.hardness_lite = hardness_lite
-        self.hardness_cpu = hardness_cpu
         if hasattr(self.model, 'config'):
             self.config = self.model.config
         self._training = None
@@ -99,7 +97,7 @@ class SoftPromptTrainable:
             sched.step()
 
     def forward_and_backward(self, pad_token_id, requested_outputs, *params, **kwparams):
-        # stretch embeddings to include the requested outputs, minus one token for the shift
+        # stretch embeddings to include the requested outputs, shifting one token for being input
         embeds = torch.cat([self.param.expand(requested_outputs.shape[0], *self.param.shape), self.wte(requested_outputs[:,:-1])], dim=1)
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
@@ -112,36 +110,34 @@ class SoftPromptTrainable:
 
         # manual loss
         logits = self.model(*params, inputs_embeds=embeds, labels=None, return_dict=False, **kwparams)[0]
-        logits = logits[:, self.num_embeds-1:, :].contiguous()
+        output_logits = logits[:, self.num_embeds-1:, :].contiguous()
             # todo? a weight could optionally be multiplied in for each requested output
-        loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), requested_outputs.view(-1), ignore_index = pad_token_id)
+        loss = torch.nn.functional.cross_entropy(output_logits.view(-1, output_logits.size(-1)), requested_outputs.view(-1), ignore_index = pad_token_id)
 
         # hardness provides for embeddinss to be trained to match tokens
         if self.hardness:
-            embeds = self.embeds if self.hardness_lite else self.param
             vocab = self.wte.weight
-            if self.hardness_cpu:
-                embeds = embeds.cpu()
-                vocab = vocab.cpu()
-
-            # vector cross difference
-            embed_vocab_distances = (
-                # embeds rows
-                embeds.expand(self.vocab_size, *self.param.shape) -
-                # vocab cols
-                vocab.expand(self.num_embeds, *vocab.shape).permute(1, 0, 2)
-            )
-            # self-dot makes squared distance
-            embed_vocab_distances = (embed_vocab_distances * embed_vocab_distances).sum(dim=-1)
-
-            # consider only the distance of each embed to the nearest vocab word
-            nearest_vocab_words = embed_vocab_distances.min(dim=0)
 
             if self.hardness_lite:
-                embed_vocab_distances = self.wte.weight[nearest_vocab_words.indices] - self.param
+                with torch.no_grad():
+                    first_token_id = torch.argmax((vocab * self.embeds[0].expand(vocab.shape[0], self.embed_dim)).sum(dim=-1))
+                    token_ids = torch.cat((torch.tensor((first_token_id,), device=self.model.device), torch.argmax(logits[0][:self.num_embeds-1], dim=-1)))
+                    token_embeds = self.wte(token_ids)
+                embed_vocab_distances = token_embeds - self.param
                 embed_vocab_distances = (embed_vocab_distances * embed_vocab_distances).sum(dim=-1)
             else:
-                embed_vocab_distances = nearest_vocab_words.values
+                # vector cross difference
+                embed_vocab_distances = (
+                    # embeds rows
+                    self.param.expand(self.vocab_size, *self.param.shape) -
+                    # vocab cols
+                    vocab.expand(self.num_embeds, *vocab.shape).permute(1, 0, 2)
+                )
+                # self-dot makes squared distance
+                embed_vocab_distances = (embed_vocab_distances * embed_vocab_distances).sum(dim=-1)
+
+                # consider only the distance of each embed to the nearest vocab word
+                embed_vocab_distances = embed_vocab_distances.min(dim=0).values
 
             loss += self.hardness * embed_vocab_distances.mean()
 
@@ -209,7 +205,7 @@ class SoftPromptTrainable:
         idx = 0
 
         # first yield the closest token to the first embedding, which the model won't output
-        dists = (self.wte.weight * self.embeds.expand(self.wte.weight.shape[0], self.embed_dim)).sum(dim=-1)
+        dists = (self.wte.weight * self.embeds[0].expand(self.wte.weight.shape[0], self.embed_dim)).sum(dim=-1)
         yield torch.argmax(dists)
 
         while True:

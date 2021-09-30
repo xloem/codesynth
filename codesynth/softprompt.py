@@ -23,16 +23,17 @@ class SoftPromptTrainable:
         self,
         model,
         num_embeds = 128,
-        optimizer = torch.optim.SGD,
-        optimizer_params = dict(lr=0.02),#0.002),
+        optimizer = torch.optim.Rprop,#torch.optim.Adadelta,#torch.optim.Rprop,#torch.optim.SGD,
+        optimizer_params = dict(),#lr=0.002),#dict(lr=0.00002),#0000002),#0.002),
         hardness = 0, # weighting for nearness to real token ids, can be changed later
         hardness_lite = True, # only measures gradients for each embed to one vocab word
         #hardness_cpu = True, # calculates distance to all vocab words on cpu, saves vram, but doesn't make use of gpu
+        use_token_weights = False, # optimise token weightings rather than raw embeddings
         straight_logits_loss = False,
-        lr_schedulers = [
-            (torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, dict(T_0=50)),
-            (ConstantWarmupLR, dict()),
-        ],
+        lr_schedulers = [],
+        #    (torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, dict(T_0=50)),
+        #    (ConstantWarmupLR, dict(lr=1e-5)),#lr=1e-10)),#)),
+        #],
     ):
         self.model = model
         self.hardness = hardness
@@ -51,8 +52,13 @@ class SoftPromptTrainable:
     
         for param in self.model.parameters():
             param.requires_grad_(False)
+        #self.model.requires_grad_(False)
         self.embeds = torch.empty((0,0), device=self.model.device)
-        self.param = torch.nn.Parameter(self.embeds)
+        self.token_weights = torch.empty((0,0), device=self.model.device)
+        if use_token_weights:
+            self.param = torch.nn.Parameter(self.token_weights)
+        else:
+            self.param = torch.nn.Parameter(self.embeds)
 
         self.num_embeds = num_embeds
         self.randomize_embeds()
@@ -82,17 +88,32 @@ class SoftPromptTrainable:
     #    for sched in self.scheds:
     #        sched.step()
 
-    def save_embeds(self, filename):
+    def state_dict(self):
+        return {
+            'optim': self.optim.state_dict(),
+            'embeds': self.embeds,
+            'token_weights': self.token_weights
+        }
+
+    def load_state_dict(self, state_dict):
+        self.optim.load_state_dict(state_dict['optim'])
+        self.num_embeds = len(state_dict['embeds'])
+        with torch.no_grad():
+            self.embeds[:] = state_dict['embeds']
+            self.token_weights[:] = state_dict['token_weights']
+
+    def save(self, filename):
         import os
-        torch.save(self.embeds, filename + '.new')
+        torch.save(self.state_dict(), filename + '.new')
         os.rename(filename + '.new', filename)
 
-    def load_embeds(self, filename):
-        self.set_embeds(torch.load(filename))
+    def load(self, filename):
+        self.load_state_dict(torch.load(filename))
 
     def __enter__(self, *params):
         if self._training is not True:
-            self.model.train()
+            #self.model.train()
+            #self.model.requires_grad_(False)
             self._training = True
         self.optim.zero_grad()
         self.model.zero_grad()
@@ -102,7 +123,13 @@ class SoftPromptTrainable:
         self.optim.step()
         for sched in self.scheds:
             sched.step()
+        #self.norm()
 
+    def norm(self):
+        if self.use_token_weights:
+            self.token_weights = self.token_weights.clamp(0,None)
+            self.token_weights /= self.token_weights.sum(dim=1, keepdim=True)
+            self.param.data = self.token_weights
     #@property:
     #def etw(self):
     #    if self._etw is None:
@@ -113,7 +140,37 @@ class SoftPromptTrainable:
 
     def forward_and_backward(self, pad_token_id, requested_outputs, *params, **kwparams):
         # stretch embeddings to include the requested outputs, shifting one token for being input
-        embeds = torch.cat([self.param.expand(requested_outputs.shape[0], *self.param.shape), self.wte(requested_outputs[:,:-1])], dim=1)
+        if self.use_token_weights:
+            #self.tokens_positive[self.token_weights.view(-1,self.vocab_size) <= 0] = False
+
+            #self.token_weights[self.tokens_positive == False] = 0
+            self.token_weights = self.token_weights.clamp(0, None)
+            #self.token_weights /= self.token_weights.sum(dim=1, keepdim=True)
+            self.param.data = self.token_weights
+
+
+            # #tokens_weights = self.param#torch.softmax(self.param, dim=1)
+            # ## this is already done in __exit__ but by putting it here autograd includes its gradient
+
+            #embeds = []
+            #tokens_weights = self.param
+            #for tokens_positive, token_weights in zip(self.tokens_positive, tokens_weights):
+            #    tokens_positive[torch.randint(len(tokens_positive),(1,))] = True
+            #    embeds.append((self.wte.weight[tokens_positive] * token_weights[tokens_positive]).sum(dim=-2))
+            #embeds = torch.stack(embeds)
+
+            tokens_weights = self.param / self.param.sum(dim=1, keepdim=True)
+            ##tokens_weights = self.param
+            ##print(self.param.view(-1)[-8:])
+            #
+            embeds = torch.stack([
+                (self.wte.weight * token_weights).sum(dim=-2)
+                for token_weights in tokens_weights#torch.softmax(self.param, dim=1)
+            ])
+            #embeds = (self.wte.weight.expand(self.token_weights.shape[0], *self.wte.weight.shape) * self.token_weights).sum(dim=-1)
+        else:
+            embeds = self.param
+        embeds = torch.cat([embeds.expand(requested_outputs.shape[0], *embeds.shape), self.wte(requested_outputs[:,:-1])], dim=1)
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
 
@@ -142,7 +199,10 @@ class SoftPromptTrainable:
             they would be near them only if the input is similar to the model's training set.
             the fastest way to find them would be to form a graph of nearness (precalculated 128d voronoi diagram)
         '''
-        if self.hardness:
+        if self.hardness and self.use_token_weights:
+            # just an expression i made up that reaches 0 when only 1 token is selected
+            loss += self.hardness * (1 - (tokens_weights * tokens_weights).sum(dim=1).mean())
+        elif self.hardness:
             embeds = self.embeds if self.hardness_lite else self.param
             vocab = self.wte.weight
             #if self.hardness_cpu:
@@ -177,7 +237,7 @@ class SoftPromptTrainable:
                 embed_vocab_distances = nearest_vocab_words.values
             loss += self.hardness * torch.sqrt(embed_vocab_distances).mean()
 
-#asdfasdf
+#afsdafsdf
 #            token_ids = torch.cat((torch.tensor((first_token_id,), device=self.model.device), torch.argmax(logits[0][:self.num_embeds-1], dim=-1)))
 #            # manual loss
 #            input_ids = torch.cat([token_ids.expand(requested_outputs.shape[0], *token_ids.shape), requested_outputs[:,:-1]], dim=1)
@@ -221,6 +281,7 @@ class SoftPromptTrainable:
                 chunk = requested_outputs[subrange:subrange+chunksize]
                 loss_sum += self.forward_and_backward(pad_token_id, chunk, *params, **kwparams)
                 chunks += 1
+        #self.norm()
         return loss_sum / chunks
 
     def __call__(self, input_ids = None, attention_mask = None, **kwparams):
@@ -240,17 +301,24 @@ class SoftPromptTrainable:
         if self._training is not False:
             self.model.eval()
             self._training = False
-        running_embeds = self.embeds.clone().detach()
-        idx = 0
-
-        # first yield tokens associated with the embeddings temselves
-        for embed in self.embeds:
-            dists = (self.wte.weight * embed.expand(self.wte.weight.shape[0], self.embed_dim)).sum(dim=-1)
-            yield torch.argmax(dists)
+        if self.use_token_weights:
+            tokens_weights = self.token_weights.clamp(0,None)
+            tokens_weights = tokens_weights / tokens_weights.sum(dim=1, keepdim=True)
+            for token in tokens_weights:
+                yield torch.argmax(token).item()
+            running_embeds = torch.stack([
+                (self.wte.weight * token_weights).sum(dim=-2)
+                for token_weights in tokens_weights
+            ])
+        else:
+            running_embeds = self.embeds.clone().detach()
+            for embed in self.embeds:
+                dists = (self.wte.weight * embed.expand(self.wte.weight.shape[0], self.embed_dim)).sum(dim=-1)
+                yield torch.argmax(dists).item()
 
         while True:
-            new_token = torch.argmax(self.model(inputs_embeds = running_embeds, **kwparams)[0][-1:],dim=-1)
-            yield new_token[0]
+            new_token = torch.argmax(self.model(inputs_embeds = running_embeds, labels=None, return_dict=False, **kwparams)[0][-1:,:],dim=1)
+            yield new_token[0].item()
             running_embeds = torch.cat([running_embeds, self.wte(new_token)])
     def array_tokens(self, len, **kwparams):
         return [token for token, idx in zip(self.generate_tokens(**kwparams), range(len))]
@@ -272,22 +340,49 @@ class SoftPromptTrainable:
     def num_embeds(self, num_embeds):
         self.param.requires_grad_(False)
         prev_embeds = self.embeds
+        prev_token_weights = self.token_weights
 
         copy_len = min(len(prev_embeds), num_embeds)
 
         self.embeds = torch.empty((num_embeds, self.embed_dim), device=self.model.device)
+        self.token_weights = torch.empty((num_embeds, self.vocab_size, 1), device=self.model.device)
 
         if copy_len < num_embeds:
-            rand_tokens = torch.empty(num_embeds - copy_len, device=self.model.device)
-            torch.nn.init.uniform_(rand_tokens, 0, self.vocab_size)
-            self.embeds[:num_embeds-copy_len] = self.wte(rand_tokens.to(torch.int))
+            num_rand = num_embeds - copy_len
+            self.embeds[:num_rand] = self.wte(self._uniform(num_rand, self.vocab_size).to(torch.int))
+            self.token_weights[:num_rand].view(num_rand, self.vocab_size)[:,:] = torch.logit(self._uniform((num_rand, self.vocab_size), 1))
+            #rand_weights = self.token_weights[:num_rand].view(num_rand, self.vocab_size)
+            #torch.nn.init.uniform_(rand_weights, 0, 1)
+            #rand_weights[:,:] = (rand_weights.t()/rand_weights.sum(dim=1)).t()
 
         if copy_len:
             self.embeds[-copy_len:] = prev_embeds[-copy_len:]
+            self.token_weights[-copy_len:] = prev_token_weights[-copy_len:]
 
-        self.param = torch.nn.Parameter(self.embeds)
+        self.use_token_weights = self.use_token_weights
 
-        self.embeds_cells = [None] * num_embeds
+        self.tokens_positive = torch.zeros(self.num_embeds, self.vocab_size) == 0
+    @property
+    def use_token_weights(self):
+        return self.param.shape == self.token_weights.shape
+    '''
+            embeds might be convertible to token weights by solving matrix equations, dunno
+            idea:
+            - take embed_dim nearest tokens and put them in matrix rows
+            - matrix has an extra row that is all 1s (to make weights sum to 1)
+            - solve weights for x in A x = b, where b is embeds with extra element = 1
+            - if any x are negative, kick out those tokens, add farther tokens, and repeat.
+                when kicking out, retain a list of m least-negative tokens
+                in case it is unsolvable without negative tokens
+                where m is the number of negative tokens remaining in matrix
+    '''
+    @use_token_weights.setter
+    def use_token_weights(self, value):
+        self.param.requires_grad_(False)
+        if value:
+            self.param = torch.nn.Parameter(self.token_weights)
+        else:
+            self.param = torch.nn.Parameter(self.embeds)
 
         # might be able to mutate the parameter list live an dnot recreate the optimizers,
         # don't know
@@ -299,14 +394,16 @@ class SoftPromptTrainable:
     def randomize_embeds(self):
         with torch.no_grad():
             # sampling from embedding space might be better but unsure how to quickly find its bounds
-            token_ids = torch.empty(self.num_embeds, device=self.model.device)
-            torch.nn.init.uniform_(token_ids, 0, self.vocab_size)
-            self.embeds[:] = self.wte(token_ids.to(torch.int))
+            self.embeds[:] = self.wte(self._uniform(self.num_embeds, self.vocab_size).to(torch.int))
+    def _uniform(self, shape, max):
+        result = torch.empty(shape, device=self.model.device)
+        torch.nn.init.uniform_(result, 0, max)
+        return result
+            
     def set_input_ids(self, input_ids):
         return self.set_embeds(self.wte(input_ids))
     def set_embeds(self, embeds):
-        if len(embeds) != self.num_embeds:
-            self.num_embeds = len(embeds)
+        self.num_embeds = len(embeds)
         with torch.no_grad():
             self.embeds[:] = embeds
 

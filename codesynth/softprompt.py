@@ -134,7 +134,7 @@ class SoftPromptTrainable:
             shape = requested_outputs.shape
             requested_logits = output_logits[torch.arange(shape[0]).repeat(shape[1],1).t(), torch.arange(shape[1]).repeat(shape[0],1), requested_outputs]
             #requested_probs = torch.sigmoid(requested_logits).prod(dim=-1)
-            loss = -requested_logits.mean()
+            loss = -requested_logits.view(-1)[requested_outputs.view(-1) != pad_token_id].mean()
 
         # hardness provides for embeddinss to be trained to match tokens
         '''
@@ -175,7 +175,7 @@ class SoftPromptTrainable:
                 embed_vocab_distances = (embed_vocab_distances * embed_vocab_distances).sum(dim=-1)
             else:
                 embed_vocab_distances = nearest_vocab_words.values
-            loss += self.hardness * embed_vocab_distances.mean()
+            loss += self.hardness * torch.sqrt(embed_vocab_distances).mean()
 
 #asdfasdf
 #            token_ids = torch.cat((torch.tensor((first_token_id,), device=self.model.device), torch.argmax(logits[0][:self.num_embeds-1], dim=-1)))

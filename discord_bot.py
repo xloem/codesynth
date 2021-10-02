@@ -1,7 +1,7 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import contextlib
 import functools
 import io
@@ -70,7 +70,7 @@ class Channel:
         self.history = []
         self.can_talk = False
         self.boringness = 0
-        self.timemark = datetime.now()
+        self.timemark = datetime.now(timezone.utc)
         self.ctx = None
 class PromptCtx:
     dir = os.path.abspath('ctxs')
@@ -143,7 +143,7 @@ class PromptCtx:
         self.last_filename = filename
     def save(self):
         if self.is_mutated:
-            now = datetime.now().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             filename = str(now) + '-' + self.ctx + '.pickle'
             filepath = os.path.join(self.path, filename)
             state_for_saving = {}
@@ -277,12 +277,13 @@ class Bot:
         print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
         try:
             if await self.preprocess_message(message):
+                #print('PENDING MESSAGE')
                 channel = self.channels.setdefault(message.channel, Channel(message.channel))
                 channel.pending.append(message)
                 channel.boringness = 0
             self.new_messages.set()
         except Exception as e:
-            print(err2str(e))
+            print('284',err2str(e))
         sys.stdout.flush()
 
     async def on_raw_reaction_add(self, payload):
@@ -312,12 +313,12 @@ class bot(Bot):
         elif score > 0:
             str = 'good'
         else:
-            str = 'soso'
+            str = 'ok'
         return f'{str} {score}'
 
     def isscorestr(self, scorestr):
         parts = scorestr.split(' ')
-        return len(parts) == 2 and parts[0] in ('bad','good','soso') and (parts[1].isnumeric() or parts[1][0] == '-' and parts[1][1:].isnumeric())
+        return len(parts) == 2 and parts[0] in ('bad','good','ok') and (parts[1].isnumeric() or parts[1][0] == '-' and parts[1][1:].isnumeric())
 
     def filtercontent(self, content):
         replacement = content.find('{replaced from:')
@@ -328,11 +329,33 @@ class bot(Bot):
     def msg2history(self, msg, chandata):
         botstr = '(bot)' if msg.author.bot else '(human)'
         content = self.filtercontent(msg.content)
-        return f'{msg.author} {botstr}: {self.scorestr(self.msgscore(msg))}: {msg.created_at.isoformat(" ", "milliseconds")} {content}'
-    def usr2history(self, user, chandata = None):
+        return f'{self.scorestr(self.msgscore(msg))} {botstr} {msg.author.name} {msg.created_at.isoformat(" ", "seconds")}: {content}'
+    def usr2history(self, user, chandata = None, nextuser = None):
         botstr = '(bot)' if user.bot else '(human)'
         score = self.scorestr(chandata.maxscore) if chandata is not None else ''
-        return f'{user} {botstr}: {score}: '
+        if nextuser is None:
+            botstr2 = '(bot)'
+        elif nextuser.bot:
+            botstr2 = '(bot)'
+        else:
+            botstr2 = '(human)'
+        return f'{score} {botstr} {user.name} '
+    def parsehistory(self, line):
+        spaceparts = line.split(' ', 6)
+        if len(spaceparts) < 7:
+            return None
+        if not self.isscorestr(spaceparts[0] + ' ' + spaceparts[1]):
+            return None
+        botstr = spaceparts[2]
+        if botstr not in ('(bot)','(human)'):
+            return None
+        user = spaceparts[3]
+        date = spaceparts[4] + ' ' + spaceparts[5]
+        if date[-1] != ':':
+            return None
+        date = date[:-1]
+        content = spaceparts[6]
+        return botstr, user, date, content
 
     async def pump(self):
         #print('pump out start')
@@ -341,16 +364,17 @@ class bot(Bot):
             #print('pump out loop')
             found = await self.fill_history()
             for channel, chandata in [*self.channels.items()]:
-                #print(channel, 'talk =', talk, 'len(history) =', len(history))
+              try:
+                #print(channel, 'talk =', chandata.can_talk, 'len(history) =', len(chandata.history))
                 #if chandata.can_talk:
                 #    print(channel, 'score of last message =', self.msgscore(chandata.history[-1]))
                 if chandata.can_talk and (
                     chandata.history[-1].author != self.client.user or
                     self.msgscore(chandata.history[-1]) < 0
                 ) and chandata.boringness < 128:
-                    #print('responding to', history[-1].author, history[-1].content)
+                    #print('responding to', chandata.history[-1].author, chandata.history[-1].content)
                     found = True
-                    reply_datetime = datetime.now()
+                    reply_datetime = datetime.now(timezone.utc)
                     try:
                         removect = 0
                         await self.fill_history()
@@ -369,8 +393,8 @@ class bot(Bot):
                         )
                         #print(model_kwparams)
                         sys.stdout.flush()
-                        if (chandata.timemark - datetime.now()).total_seconds() <= 10:
-                            print('typing since, given now is', datetime.now(), 'then timemark is soon:', chandata.timemark)
+                        if (chandata.timemark - datetime.now(timezone.utc)).total_seconds() <= 10:
+                            print('typing since, given now is', datetime.now(timezone.utc), 'then timemark is soon:', chandata.timemark)
                             async with channel.typing():
                                 reply = await asyncify(self.model)(prompt.strip(), **model_kwparams)
                         else:
@@ -379,10 +403,10 @@ class bot(Bot):
                         print(prompt[-256:])
                         print('considering:', preprompt + ' ' + reply)
                         try:
-                            date, time, reply = reply.split(' ', 2)
-                            reply_datetime = datetime.fromisoformat(date  + ' ' + time)
+                            reply_datetime, reply = reply.split(': ', 1)
+                            reply_datetime = datetime.fromisoformat(reply_datetime + '+00:00')
                         except ValueError as e:
-                            print(e)
+                            print(err2str(e))
                             continue
                         print('time =', reply_datetime.isoformat())
                         #time = datetime.datetime.fromisoformat(date + ' ' + time)
@@ -403,25 +427,22 @@ class bot(Bot):
                         botct = 0
                         mark = 0
                         for idx, line in enumerate(lines):
-                            if '#' in line: # hacky way to identify that a line is message
-                                name, bit = line.split('#', 1)
-                                if ':' in bit:
-                                    bits = bit.split(':')
-                                    namebits = bits[0].split(' ')
-                                    if len(namebits) == 2 and len(bits) > 2 and namebits[0].isnumeric() and namebits[1] in ('(bot)', '(human)') and self.isscorestr(bits[1].strip()):
-                                        if mark == 0:
-                                            mark = idx
-                                        if '(human)' not in line:
-                                            botct += 1
-                                        else:
-                                            humanct += 1
-                                        if botct + humanct < 3:
-                                            break
+                            parsed = self.parsehistory(line)
+                            if parsed is not None:
+                                if mark == 0:
+                                    mark = idx
+                                if parsed[0] != '(human)':
+                                    botct += 1
+                                    if botct >= 3:
+                                        break
+                                else:
+                                    humanct += 1
+                                    break
                         if humanct > 0:
                             reply = '\n'.join(lines[:mark])
                     except Exception as e:
-                        print(reply)
                         reply = err2str(e)
+                        print(reply)
                     if len(reply) == 0:
                         reply = '[empty message??]'
                         print(reply)
@@ -429,7 +450,7 @@ class bot(Bot):
                         chandata.boringness += 1
                     sys.stdout.flush()
                     if len(reply) > 0:
-                        delay = (reply_datetime - datetime.now()).total_seconds()
+                        delay = (reply_datetime - datetime.now(timezone.utc)).total_seconds()
                         if delay > 10:
                             chandata.timemark = reply_datetime
                             print('too far in future to wait here for, moving on', delay, 'to', chandata.timemark)
@@ -448,9 +469,15 @@ class bot(Bot):
                             print(reply)
                             print(e)
                             await channel.send('SERVER ERROR, MESSAGE TOO LONG?  PLEASE REVIEW OUTPUT. oh next message might work who knows, maybe i can try again.')
+              except Exception as e:
+                  # this is usually not hit, rather the exception farther inside is hit.  haven't reviewed if it would be good to merge them.
+                  print(err2str(e))
+                  if chandata.can_talk:
+                      await channel.send(err2str(e)[:2000])
             if not found:
                 self.new_messages.clear()
                 await self.new_messages.wait()
+                #print('done waiting for messages')
 
     async def preprocess_message(self, message):
         is_bot_reply = False

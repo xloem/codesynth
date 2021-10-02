@@ -23,17 +23,18 @@ class SoftPromptTrainable:
         self,
         model,
         num_embeds = 128,
-        optimizer = torch.optim.Rprop,#torch.optim.Adadelta,#torch.optim.Rprop,#torch.optim.SGD,
-        optimizer_params = dict(),#lr=0.002),#dict(lr=0.00002),#0000002),#0.002),
+        optimizer = torch.optim.SGD,#torch.optim.Rprop,#torch.optim.Adadelta,#torch.optim.Rprop,#torch.optim.SGD,
+        optimizer_params = dict(lr=0.002),#step_sizes=(1e-10,5000)),#lr=0.002),#dict(lr=0.00002),#0000002),#0.002),
         hardness = 0, # weighting for nearness to real token ids, can be changed later
         hardness_lite = True, # only measures gradients for each embed to one vocab word
         #hardness_cpu = True, # calculates distance to all vocab words on cpu, saves vram, but doesn't make use of gpu
         use_token_weights = False, # optimise token weightings rather than raw embeddings
+        token_weights_are_logits = True, # rather than making embeddings, select specific tokens
         straight_logits_loss = False,
-        lr_schedulers = [],
-        #    (torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, dict(T_0=50)),
-        #    (ConstantWarmupLR, dict(lr=1e-5)),#lr=1e-10)),#)),
-        #],
+        lr_schedulers = [#],
+            (torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, dict(T_0=200)),
+            (ConstantWarmupLR, dict(lr=1e-5)),#lr=1e-10)),#)),
+        ],
     ):
         self.model = model
         self.hardness = hardness
@@ -59,6 +60,7 @@ class SoftPromptTrainable:
             self.param = torch.nn.Parameter(self.token_weights)
         else:
             self.param = torch.nn.Parameter(self.embeds)
+        self.token_weights_are_logits = token_weights_are_logits
 
         self.num_embeds = num_embeds
         self.randomize_embeds()
@@ -119,11 +121,15 @@ class SoftPromptTrainable:
         self.model.zero_grad()
         return self
 
-    def __exit__(self, *params):
-        self.optim.step()
-        for sched in self.scheds:
-            sched.step()
-        #self.norm()
+    def __exit__(self, exception_type, exception_value, traceback):
+        try:
+            self.optim.step()
+            for sched in self.scheds:
+                sched.step()
+        except:
+            if exception_value is None:
+                raise
+        self.norm()
 
     def norm(self):
         if self.use_token_weights:
@@ -138,12 +144,22 @@ class SoftPromptTrainable:
     #        self.etw
                     
 
-    def forward_and_backward(self, pad_token_id, requested_outputs, *params, **kwparams):
-        # stretch embeddings to include the requested outputs, shifting one token for being input
-        if self.use_token_weights:
-            #self.tokens_positive[self.token_weights.view(-1,self.vocab_size) <= 0] = False
+    def forward_loss(self, pad_token_id, requested_outputs, *params, **kwparams):
+        torch.autograd.set_detect_anomaly(True)
 
-            #self.token_weights[self.tokens_positive == False] = 0
+        loss_scale = 1
+
+        # stretch embeddings to include the requested outputs, shifting one token for being input
+        if self.use_token_weights and not self.token_weights_are_logits:
+            # moved lower down
+            #if torch.any(self.token_weights[self.tokens_positive == False] > 0):
+            #    # if any of self.tokens_positive is set False that have positive values, then set them all to true to reneighbor
+            #    self.tokens_positive = True
+            #else:
+            #    nonpositive = self.token_weights.view(-1,self.vocab_size) <= 0
+            #    self.tokens_positive[nonpositive] = False
+            #    self.token_weights[nonpositive] = 0
+
             self.token_weights = self.token_weights.clamp(0, None)
             #self.token_weights /= self.token_weights.sum(dim=1, keepdim=True)
             self.param.data = self.token_weights
@@ -152,25 +168,142 @@ class SoftPromptTrainable:
             # #tokens_weights = self.param#torch.softmax(self.param, dim=1)
             # ## this is already done in __exit__ but by putting it here autograd includes its gradient
 
-            #embeds = []
-            #tokens_weights = self.param
-            #for tokens_positive, token_weights in zip(self.tokens_positive, tokens_weights):
-            #    tokens_positive[torch.randint(len(tokens_positive),(1,))] = True
-            #    embeds.append((self.wte.weight[tokens_positive] * token_weights[tokens_positive]).sum(dim=-2))
-            #embeds = torch.stack(embeds)
+            embeds = []#torch.empty(shapelr
+            tokens_weights = []
+            #weightlens = []
+            for idx in range(self.param.shape[0]):
+                #filtered_param = self.param[idx][self.tokens_positive]
+                tokens_positive = self.tokens_positive[idx]
+                if not torch.any(self.token_weights[idx] > 0):
+                    self.token_weights[idx] = torch.rand(self.token_weights[idx].shape)
+                token_weights = self.param[idx]
+                vocab_embeds = self.wte.weight
+                nonpositive = token_weights.view(-1) <= 0
+                if torch.any(token_weights[tokens_positive == False] > 0) and len(self.tokens_positive.nonzero()) < 5000:
+                        #print(len(self.tokens_positive.nonzero()))
+                    print('reneighboring', idx)
+                    tokens_positive[:] = True
+                    #idcs = tokens_positive.nonzero(as_tuple=True)
+                elif len(nonpositive):
+                    tokens_positive[nonpositive] = False
+                    tokens_positive = tokens_positive.clone()
+                    tokens_positive[torch.randint(len(tokens_positive),(64,))] = True
+                    while True:
+                        try:
+                            token_weights, vocab_embeds = (token_weights[tokens_positive], vocab_embeds[tokens_positive])
+                            break
+                        except RuntimeError:
+                            # out of memory workaround
+                            self.tokens_positive.view(-1)[torch.randperm(len(self.tokens_positive.view(-1)))[:len(self.tokens_positive.view(-1))//2]] = False
+                            if not torch.any(tokens_positive):
+                                raise
+                #print(tokens_positive.shape)
+                #print(token_weights.shape)
+                    #idcs = tokens_positive.nonzero(as_tuple=True)
+                    #extra = torch.randint(len(tokens_positive),(1,))
+                    #if not tokens_positive[extra]:
+                    #    token_weights = torch.cat((token_weights[tokens_positive], token_weights[extra]))
+                    #    vocab_embeds = torch.cat((vocab_embeds[tokens_positive], vocab_embeds[extra]))
+                    #else:
+                    #    token_weights = token_weights[tokens_positive.nonzero(as_tuple=True)]
+                    #    vocab_embeds = vocab_embeds[tokens_positive.nonzero(as_tuple=True)]
+                self.param.data[idx,nonpositive] = 0
+                #idcs = tokens_positive.nonzero()
+                #extra = torch.randint(len(tokens_positive),(1,1))
+                #if extra not in idcs:
+                #    print('extra')
+                #    idcs = torch.cat([idcs, extra])
+                token_weights = token_weights / token_weights.sum(dim=0,keepdim=True)
+                #vocab_embeds = self.wte.weight[tokens_positive]
 
-            tokens_weights = self.param / self.param.sum(dim=1, keepdim=True)
-            ##tokens_weights = self.param
-            ##print(self.param.view(-1)[-8:])
-            #
-            embeds = torch.stack([
-                (self.wte.weight * token_weights).sum(dim=-2)
-                for token_weights in tokens_weights#torch.softmax(self.param, dim=1)
-            ])
-            #embeds = (self.wte.weight.expand(self.token_weights.shape[0], *self.wte.weight.shape) * self.token_weights).sum(dim=-1)
+                #sum = torch.zeros(vocab_embeds.shape[1:], device=self.model.device)
+                #for embed, weight in zip(vocab_embeds, token_weights):
+                #    sum += embed * weight
+                #embeds.append(sum)#(vocab_embeds * token_weights).sum(dim=-2))
+
+                try:
+                    embeds.append((vocab_embeds * token_weights).sum(dim=-2))
+                except RuntimeError:
+                    # out of memory workaround
+                    embeds.append(torch.stack([
+                        torch.dot(vocab_embeds[:,0], token_weights[:,0])
+                        for idx in range(self.embed_dim)
+                    ]))
+                #embeds.append(torch.stack([
+                #    torch.dot(vocab_embeds[idcs.view(-1),0], token_weights[idcs.view(-1),0])
+                #    for idx in range(self.embed_dim)
+                #]))
+                        # summing on second-to-last dimension.
+                        # last dimension is just empty i think
+
+                        # we can do embed-sum better
+                        # by having torch do the perpendicular sums
+                #embeds.append(torch.stack([
+                    #vocab_embeds[idx] * token_weights[idx]
+                #])
+
+                tokens_weights.append(token_weights)
+                del token_weights
+                del vocab_embeds
+                #weightlens.append((token_weights * token_weights).sum())
+            embeds = torch.stack(embeds)
+
+            # tokens_weights = self.param / self.param.sum(dim=1, keepdim=True)
+            # ##tokens_weights = self.param
+            # ##print(self.param.view(-1)[-8:])
+            # #
+            # embeds = torch.stack([
+            #     (self.wte.weight * token_weights).sum(dim=-2)
+            #     for token_weights in tokens_weights#torch.softmax(self.param, dim=1)
+            # ])
+            # #embeds = (self.wte.weight.expand(self.token_weights.shape[0], *self.wte.weight.shape) * self.token_weights).sum(dim=-1)
+            embeds = embeds.expand(requested_outputs.shape[0], *embeds.shape)
+        elif self.use_token_weights and self.token_weights_are_logits:
+            for idx in range(self.token_weights.shape[0]):
+                if not torch.any(self.token_weights[idx] > 0):
+                    self.token_weights[idx] = torch.rand(self.token_weights[idx].shape)
+                else:
+                    self.token_weights[idx] = self.token_weights[idx].clamp(0, None)#1 / self.vocab_size, None)
+            tokens_weights = self.param.view(self.num_embeds, -1)# + 0.0001 / self.vocab_size
+            #print(tokens_weights)
+            try:
+                tokens_weights = tokens_weights / tokens_weights.sum(dim=1,keepdim=True)
+                #tokens_weights = torch.nn.functional.softmax(tokens_weights_logits, dim=1)
+            except Exception as exc:
+                import pdb, traceback
+                print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                pdb.set_trace()
+                raise
+            #print('2t', tokens_weights)
+            #with torch.no_grad():
+            token_ids = torch.multinomial(tokens_weights, requested_outputs.shape[0], replacement=True).T
+            #print('3t', token_ids)
+            'token_ids now has a row for each requested output'
+            #import pdb; pdb.set_trace()
+            #        not sure of dimensions of indexing on next line
+            loss_scale1 = loss_scale * tokens_weights[torch.arange(token_ids.shape[1]).expand(token_ids.shape), token_ids]
+            #print(1, loss_scale1)
+            #loss_scale2 = (loss_scale1 * tokens_weights.shape[0] / loss_scale1.sum()).prod(dim=1)
+            loss_scale2 = torch.log(loss_scale1).sum(dim=1)
+            #loss_scale2 = loss_scale1.sum(dim=1)#torch.log(loss_scale1).sum(dim=1)
+            #print(2, loss_scale2)
+            #if torch.any(loss_scale2 == 0) or len(loss_scale2) == 1:
+            if len(loss_scale2) == 1:
+                import pdb; pdb.set_trace()
+            #loss_scale = loss_scale2 / loss_scale2.sum()
+            loss_scale = torch.softmax(loss_scale2, dim=0)
+            if torch.any(loss_scale == 0):
+                import pdb; pdb.set_trace() 
+            #print(3, loss_scale)
+            del loss_scale2
+            del loss_scale1
+            #loss_weights = tokens_weights_logits[torch.arange(token_ids.shape[1]).repeat(token_ids.shape[0]), token_ids]token_ids].prod(dim=1)
+            #loss_weights = loss_scale * requested_outputs.shape[0] / loss_scale.sum()
+            embeds = self.wte(token_ids)
         else:
             embeds = self.param
-        embeds = torch.cat([embeds.expand(requested_outputs.shape[0], *embeds.shape), self.wte(requested_outputs[:,:-1])], dim=1)
+            embeds = embeds.expand(requested_outputs.shape[0], *embeds.shape)
+        embeds = torch.cat([embeds, self.wte(requested_outputs[:,:-1])], dim=1)
         
         # labels are compared with the full text.  a value of -100 is supposed to be ignored.
 
@@ -186,12 +319,13 @@ class SoftPromptTrainable:
         output_logits = logits[:, self.num_embeds-1:, :].contiguous()
             # todo? a weight could optionally be multiplied in for each requested output
         if not self.straight_logits_loss:
-            loss = torch.nn.functional.cross_entropy(output_logits.view(-1, output_logits.size(-1)), requested_outputs.view(-1), ignore_index = pad_token_id)
+            loss = torch.nn.functional.cross_entropy(output_logits.view(-1, output_logits.size(-1)), requested_outputs.view(-1), ignore_index = pad_token_id, reduction = 'none')
         else:
             shape = requested_outputs.shape
             requested_logits = output_logits[torch.arange(shape[0]).repeat(shape[1],1).t(), torch.arange(shape[1]).repeat(shape[0],1), requested_outputs]
             #requested_probs = torch.sigmoid(requested_logits).prod(dim=-1)
-            loss = -requested_logits.view(-1)[requested_outputs.view(-1) != pad_token_id].mean()
+            loss = -requested_logits.view(-1)[requested_outputs.view(-1) != pad_token_id]
+        loss = (loss * loss_scale).sum()
 
         # hardness provides for embeddinss to be trained to match tokens
         '''
@@ -200,8 +334,13 @@ class SoftPromptTrainable:
             the fastest way to find them would be to form a graph of nearness (precalculated 128d voronoi diagram)
         '''
         if self.hardness and self.use_token_weights:
-            # just an expression i made up that reaches 0 when only 1 token is selected
-            loss += self.hardness * (1 - (tokens_weights * tokens_weights).sum(dim=1).mean())
+            # expression i made up that reaches 0 when only 1 token is selected
+            weightlens = torch.stack([
+                (token_weights * token_weights).sum()
+                for token_weights in tokens_weights
+            ])
+            #weightlens = (tokens_weights * tokens_weights).sum(dim=1)
+            loss += self.hardness * (1 - weightlens.sqrt()).sum()#min())#.mean())
         elif self.hardness:
             embeds = self.embeds if self.hardness_lite else self.param
             vocab = self.wte.weight
@@ -209,20 +348,20 @@ class SoftPromptTrainable:
             #    embeds = embeds.cpu()
             #    vocab = vocab.cpu()
 
-            embed_vocab_distances = []
-            for embed in embeds:
-                distance = embed.expand(self.vocab_size, *embed.shape) - vocab
-                distance = (distance * distance).sum(dim=-1)
-                embed_vocab_distances.append(distance)
-            embed_vocab_distances = torch.stack(embed_vocab_distances).t()
+            #embed_vocab_distances = []
+            #for embed in embeds:
+            #    distance = embed.expand(self.vocab_size, *embed.shape) - vocab
+            #    distance = (distance * distance).sum(dim=-1)
+            #    embed_vocab_distances.append(distance)
+            #embed_vocab_distances = torch.stack(embed_vocab_distances).t()
                     
             # vector cross difference
-            #embed_vocab_distances = (
-            #    # embeds rows
-            #    embeds.expand(self.vocab_size, *self.param.shape) -
-            #    # vocab cols
-            #    vocab.expand(self.num_embeds, *vocab.shape).permute(1, 0, 2)
-            #)
+            embed_vocab_distances = (
+                # embeds rows
+                embeds.expand(self.vocab_size, *embeds.shape) -
+                # vocab cols
+                vocab.expand(self.num_embeds, *vocab.shape).permute(1, 0, 2)
+            )
             # self-dot makes squared distance
             #embed_vocab_distances = (embed_vocab_distances * embed_vocab_distances).sum(dim=-1)
 
@@ -245,18 +384,19 @@ class SoftPromptTrainable:
 #            output_logits = logits[:, self.num_embeds-1:, :].contiguous()
 #            loss += self.hardness * torch.nn.functional.cross_entropy(output_logits.view(-1, output_logits.size(-1)), requested_outputs.view(-1), ignore_index = pad_token_id)
 
-        loss.backward()
-        return loss.detach()
+        return loss
+        #loss.backward()
+        #return loss.detach()
 
     def find_chunksize_for_data(self, requested_outputs, *params, **kwparams):
-        self.forward_and_backward(-100, requested_outputs[:1], *params, **kwparams)
+        low = 2
+        high = requested_outputs.shape[0]
+        self.batch(-100, requested_outputs[:low], epochs_per_batch=1, chunksize=low, *params, **kwparams)
         try:
-            self.forward_and_backward(-100, requested_outputs, *params, **kwparams)
-            return requested_outputs.shape[0]
+            self.batch(-100, requested_outputs[:high], epochs_per_batch=1, chunksize=high, *params, **kwparams)
+            return high
         except:
             pass
-        low = 1
-        high = requested_outputs.shape[0]
         while low + 1 < high:
             mid = (low + high) // 2
             if mid == low:
@@ -264,25 +404,27 @@ class SoftPromptTrainable:
             if mid == high:
                 mid -= 1
             try:
-                self.forward_and_backward(-100, requested_outputs[:mid], *params, **kwparams)
+                self.batch(-100, requested_outputs[:mid], epochs_per_batch=1, chunksize=mid, *params, **kwparams)
                 low = mid
             except:
                 high = mid
         return low
 
-    def epoch(self, pad_token_id, requested_outputs, chunksize=16, *params, **kwparams):
+    def batch(self, pad_token_id, requested_outputs, epochs_per_batch=1, chunksize=16, *params, **kwparams):
         loss_sum = 0
         chunks = 0
 
-        # atm batch size (data between model updates) is equated to epoch size (full data pass)
-
         with self: # enter batch
-            for subrange in range(0, requested_outputs.shape[0], chunksize): # cross epoch in chunks
-                chunk = requested_outputs[subrange:subrange+chunksize]
-                loss_sum += self.forward_and_backward(pad_token_id, chunk, *params, **kwparams)
-                chunks += 1
+            for epoch in range(epochs_per_batch):
+                for chunk_offset in range(0, requested_outputs.shape[0], chunksize): # cross epoch in chunks
+                    chunk = requested_outputs[chunk_offset:chunk_offset+chunksize]
+                    loss_sum += self.forward_loss(pad_token_id, chunk, *params, **kwparams)
+                    chunks += len(chunk)
+            #print('pre:', self.param)
+            loss_sum.backward()
+            #print('post:', self.param)
         #self.norm()
-        return loss_sum / chunks
+        return loss_sum.detach() / chunks
 
     def __call__(self, input_ids = None, attention_mask = None, **kwparams):
         if self._training is not False:
@@ -350,7 +492,8 @@ class SoftPromptTrainable:
         if copy_len < num_embeds:
             num_rand = num_embeds - copy_len
             self.embeds[:num_rand] = self.wte(self._uniform(num_rand, self.vocab_size).to(torch.int))
-            self.token_weights[:num_rand].view(num_rand, self.vocab_size)[:,:] = torch.logit(self._uniform((num_rand, self.vocab_size), 1))
+            #self.token_weights[:num_rand].view(num_rand, self.vocab_size)[:,:] = torch.logit(self._uniform((num_rand, self.vocab_size), 1))
+            self.token_weights[:num_rand].view(num_rand, self.vocab_size)[:,:] = self._uniform((num_rand, self.vocab_size), 1)
             #rand_weights = self.token_weights[:num_rand].view(num_rand, self.vocab_size)
             #torch.nn.init.uniform_(rand_weights, 0, 1)
             #rand_weights[:,:] = (rand_weights.t()/rand_weights.sum(dim=1)).t()

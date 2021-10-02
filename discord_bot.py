@@ -184,6 +184,21 @@ class PromptCtx:
                 del new_kwparams[key]
         self.kwparams = new_kwparams
         return self.kwparams
+    async def guess(self, model, content):
+        content = self.kwparams.get('prefix','') + content
+        if self.kwparams.get('delimiter'):
+            if len(self.prompt) and self.prompt[-1] != self.kwparams['delimiter']:
+                content = self.kwparams['delimiter'] + content
+        if self.kwparams['append_delimiter']:
+            content += self.kwparams['delimiter']
+        response = (await asyncify(model)(self.prompt + content, **self.model_kwparams))[0]['generated_text']
+        eos = self.kwparams.get('eos_token_id')
+        if eos:
+            if response.endswith(eos) and not self.kwparams.get('include_eos'):
+                response = response[:-len(eos)]
+            elif not response.endswith(eos) and self.kwparams.get('include_eos'):
+                response += eos
+        return response, content
 
 
 class Bot:
@@ -219,6 +234,14 @@ class Bot:
                             channel.can_talk = True
                         elif channel.can_talk and (self.name + ', stop talking') in msg.content:
                             channel.can_talk = False
+                            if channel.ctx is not None:
+                                channel.ctx.chandata = None
+                                channel.ctx = None
+                        elif channel.ctx is not None:
+                            if channel.can_talk:
+                                response = await chandata.ctx.guess(self.model, msg.content)
+                                await self.reply_msg(msg, '`'+response+'`')
+                            continue
                         channel.history.append(msg)
                 if len(channel.history) > 2048:
                     channel.history = channel.history[-2048:]
@@ -274,7 +297,7 @@ class Bot:
         return True
     
     async def on_message(self, message):
-        print(message.channel, message.author, 'in response to =', message.reference, ':', message.content)
+        print(message.channel, message.author, 'in response to =', message.reference, ':', repr(message.content))
         try:
             if await self.preprocess_message(message):
                 #print('PENDING MESSAGE')
@@ -501,6 +524,10 @@ class bot(Bot):
                         oldcontent = oldcontent[oldcontent.find('{replaced from: ') + len('{replaced from: '):]
                         oldconent = oldcontent[:-1]
                     await message.reference.resolved.edit(content = newcontent + '{replaced from: ' + oldcontent + '}' )
+                    chandata = self.channels.setdefault(message.channel, Channel(message.channel))
+                    for histmessage in (*chandata.history, *chandata.pending):
+                        if histmessage.id == message.reference.resolved.id:
+                            histmessage.content = newcontent
                     print('UPDATED CONTENT:', message.reference.resolved.content)
                     sys.stdout.flush()
                     return False
@@ -528,19 +555,7 @@ class bot(Bot):
                         await self.reply_msg(message, ctx.kwparams2str() + '\n`' + ctx.prompt + '`')
                     elif cmd == "guess":
                         await message.add_reaction(emoji.thinking)
-                        content = ctx.kwparams.get('prefix','') + content
-                        if ctx.kwparams.get('delimiter'):
-                            if len(ctx.prompt) and ctx.prompt[-1] != ctx.kwparams['delimiter']:
-                                content = ctx.kwparams['delimiter'] + content
-                        if ctx.kwparams['append_delimiter']:
-                            content += ctx.kwparams['delimiter']
-                        response = (await asyncify(self.model)(ctx.prompt + content, **ctx.model_kwparams))[0]['generated_text']
-                        eos = ctx.kwparams.get('eos_token_id')
-                        if eos:
-                            if response.endswith(eos) and not ctx.kwparams.get('include_eos'):
-                                response = response[:-len(eos)]
-                            elif not response.endswith(eos) and ctx.kwparams.get('include_eos'):
-                                response += eos
+                        response, content = await ctx.guess(self.model, content)
                         sent = await self.reply_msg(message, '`'+response+'`')
                         await message.remove_reaction(emoji.thinking, self.client.user)
                         await sent.add_reaction(emoji.thumbsup)
@@ -639,8 +654,9 @@ class bot(Bot):
                     elif cmd == 'channel':
                         chandata = self.channels.setdefault(message.channel, Channel(message.channel))
                         chandata.ctx = ctx
+                        chandata.can_talk = True
                         ctx.chandata = chandata
-                        await self.reply_msg(message, str(channel))
+                        await self.reply_msg(message, str(message.channel))
                     #elif cmd == 'addline':
                     #    if len(content) == 0:
                     #        content = message_replied.content

@@ -24,7 +24,7 @@ class SoftPromptTrainable:
         model,
         num_embeds = 128,
         optimizer = torch.optim.SGD,#torch.optim.Rprop,#torch.optim.Adadelta,#torch.optim.Rprop,#torch.optim.SGD,
-        optimizer_params = dict(lr=0.002),#step_sizes=(1e-10,5000)),#lr=0.002),#dict(lr=0.00002),#0000002),#0.002),
+        optimizer_params = dict(lr=0.01),#step_sizes=(1e-10,5000)),#lr=0.002),#dict(lr=0.00002),#0000002),#0.002),
         hardness = 0, # weighting for nearness to real token ids, can be changed later
         hardness_lite = True, # only measures gradients for each embed to one vocab word
         #hardness_cpu = True, # calculates distance to all vocab words on cpu, saves vram, but doesn't make use of gpu
@@ -275,12 +275,13 @@ class SoftPromptTrainable:
                 pdb.set_trace()
                 raise
             #print('2t', tokens_weights)
-            #with torch.no_grad():
-            token_ids = torch.multinomial(tokens_weights, requested_outputs.shape[0], replacement=True).T
+            with torch.no_grad():
+                token_ids = torch.multinomial(tokens_weights, requested_outputs.shape[0], replacement=True).T
             #print('3t', token_ids)
             'token_ids now has a row for each requested output'
             #import pdb; pdb.set_trace()
             #        not sure of dimensions of indexing on next line
+            #tokens_weights[torch.arange(token_ids.shape[1]).expand(token_ids.shape), token_ids] /= 4
             loss_scale1 = loss_scale * tokens_weights[torch.arange(token_ids.shape[1]).expand(token_ids.shape), token_ids]
             #print(1, loss_scale1)
             #loss_scale2 = (loss_scale1 * tokens_weights.shape[0] / loss_scale1.sum()).prod(dim=1)

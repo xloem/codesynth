@@ -342,7 +342,7 @@ class rate_limited:
 
 class eleuther_demo(rate_limited, CausalLanguageModel):
     def __init__(self, url='https://api.eleuther.ai/completion'):
-        super().__init__(5)
+        super().__init__(10)
         import requests
         self.url = url
         self.requests = requests

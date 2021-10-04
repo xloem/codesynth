@@ -2,7 +2,7 @@ FROM python:3.8
 
 WORKDIR /discord_bot
 
-RUN [ "pip3", "install", "discord", "pandas", "requests", "uri", "http.request", "ps", "google", "ticker", "yahoo_finance" ]
+RUN [ "pip3", "install", "discord", "pandas", "requests", "uri", "http.request", "ps", "google", "ticker", "yahoo_finance", "sympy" ]
 
 # some files are presently excluded for speed in .dockerignore
 COPY codesynth ./codesynth

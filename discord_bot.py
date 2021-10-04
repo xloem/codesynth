@@ -676,7 +676,23 @@ class bot(Bot):
         #print('reply msg', replyto, replywith)
         if not len(replywith):
             replywith = '<no data>'
-        return await replyto.channel.send(replywith, reference=replyto)
+        if len(replywith) < 2000:
+            return await replyto.channel.send(replywith, reference=replyto)
+        else:
+            lines = replywith.split('\n')
+            txt = ''
+            for line in lines:
+                if len(txt) and len(txt) + len(line) >= 2000:
+                    await replyto.channel.send(txt, reference=replyto)
+                    txt = ''
+                if len(line) >= 2000:
+                    txt = line[:2000 - 3] + '...'
+                    break
+                if len(txt):
+                    txt += '\n'
+                txt += line
+            await replyto.channel.send(txt, reference=replyto)
+
         #print('sent')
 
     async def on_raw_reaction_add(self, payload):

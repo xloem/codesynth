@@ -331,12 +331,12 @@ class rate_limited:
     def wait(self):
         now = self.time.time()
         diff = self.wait_needed()
+        self._mark += self._duration
         if diff > 0:
             #print('sleeping for', diff)
             self.time.sleep(diff)
         #else:
         #    print('no sleep needed')
-        self._mark += self._duration
     def wait_needed(self):
         return max(0,self._mark + self._duration - self.time.time())
 

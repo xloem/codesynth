@@ -364,7 +364,7 @@ class bot(Bot):
             botstr2 = '(human)'
         return f'{score} {botstr} {user.name} '
     def parsehistory(self, line):
-        spaceparts = line.split(' ', 6)
+        spaceparts = line.split(' ')
         if len(spaceparts) < 7:
             return None
         if not self.isscorestr(spaceparts[0] + ' ' + spaceparts[1]):
@@ -372,13 +372,20 @@ class bot(Bot):
         botstr = spaceparts[2]
         if botstr not in ('(bot)','(human)'):
             return None
-        user = spaceparts[3]
-        date = spaceparts[4] + ' ' + spaceparts[5]
-        if date[-1] != ':':
-            return None
-        date = date[:-1]
-        content = spaceparts[6]
-        return botstr, user, date, content
+        for idx in range(4, len(spaceparts)):
+            if len(spaceparts[idx]) and spaceparts[idx][-1] == ':':
+                user = ' '.join(spaceparts[3:idx-1])
+                date = spaceparts[idx-1] + ' ' + spaceparts[idx][:-1]
+                content = spaceparts[idx+1:] if idx < len(spaceparts)-1 else ''
+                return botstr, user, date, content
+        return None
+        #user = spaceparts[3]
+        #date = spaceparts[4] + ' ' + spaceparts[5]
+        #if date[-1] != ':':
+        #    return None
+        #date = date[:-1]
+        #content = spaceparts[6]
+        #return botstr, user, date, content
 
     async def pump(self):
         #print('pump out start')
@@ -418,7 +425,10 @@ class bot(Bot):
                         sys.stdout.flush()
                         if (chandata.timemark - datetime.now(timezone.utc)).total_seconds() <= 10:
                             print('typing since, given now is', datetime.now(timezone.utc), 'then timemark is soon:', chandata.timemark)
-                            async with channel.typing():
+                            try:
+                                async with channel.typing():
+                                    reply = await asyncify(self.model)(prompt.strip(), **model_kwparams)
+                            except:
                                 reply = await asyncify(self.model)(prompt.strip(), **model_kwparams)
                         else:
                             reply = await asyncify(self.model)(prompt.strip(), **model_kwparams)
@@ -486,7 +496,7 @@ class bot(Bot):
                             async with channel.typing():
                                 await asyncio.sleep(delay)
                         try:
-                            await channel.send(reply)
+                            await channel.send(reply[:2000])
                         except Exception as e:
                             print('TOO LONG?')
                             print(reply)
@@ -542,6 +552,29 @@ class bot(Bot):
             if message_replied.content.lower().startswith('ctx ') and message_replied.reference is not None:
                 # command result, hopefully?
                 return False
+        if message.content.startswith('.playfield'):
+            if any((reaction.me for reaction in message.reactions)):
+                return False
+            while True:
+                try:
+                    await message.add_reaction(emoji.random())
+                    break
+                except discord.errors.HTTPException: # unknown emoji
+                    continue
+            import torch
+            if not hasattr(self, 'playfield'):
+                self.playfield = torch.zeros([384,384,3], dtype=torch.uint8)
+            self.playfield_msg = await message.channel.send('image test')
+            await self.update_playfield()
+            #with io.BytesIO() as image_binary:
+            #    PIL.Image.Image.fromarray(self.playfield.numpy().save(image_binary, 'PNG')
+            #    image_base64 = base64.b64encode(image_binary.getvalue()).decode('utf-8')
+            #    embed = discord.Embed()
+            #    embed.set_image('data:image/png;base64,' + image_base64)
+            #    self.playfield_msg = await message.channel.send(embed=embed)
+            #    #image_binary.seek(0)
+            #    #self.playfield_msg = await message.channel.send(file=discord.File(fp=image_binary, filename='playfield.png'))
+            return False
         if is_bot_reply: # could also check for name mention
             try:
                 if message.content.lower().startswith('ctx '):
@@ -604,7 +637,7 @@ class bot(Bot):
                                         captured_output = io.StringIO()
                                         with contextlib.redirect_stdout(captured_output):
                                             with contextlib.redirect_stderr(captured_output):
-                                                exec(sent.content[1:-1], {}, ctx.state)
+                                                exec(sent.content[1:-1], {'self':self,'outer':globals()}, ctx.state)
                                         ctx.save()
                                         result = captured_output.getvalue()
                                         if not len(result):
@@ -671,6 +704,16 @@ class bot(Bot):
                 await self.reply_msg(message, reply)
             return False
         return True
+
+    async def update_playfield(self):
+        import PIL, base64, io
+        with io.BytesIO() as image_binary:
+            PIL.Image.Image.fromarray(self.playfield.numpy().save(image_binary, 'PNG'))
+            image_base64 = base64.b64encode(image_binary.getvalue()).decode('utf-8')
+        embed = discord.Embed()
+        embed.set_image('data:image/png;base64,' + image_base64)
+        return await self.playfield_msg.edit(embed=embed)
+
 
     async def reply_msg(self, replyto, replywith):
         #print('reply msg', replyto, replywith)

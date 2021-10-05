@@ -154,9 +154,38 @@ class ghpy_tiny(ghpy):
     def __init__(self, model='lg/ghpy_2k', *params, **kwparams):
         super().__init__(model, *params, **kwparams)
 
-class ai21(CausalLanguageModel):
-    apikey = os.environ.get('AI21_API_KEY')
-    def __init__(self, model='j1-large', apikey=None):
+class rate_limited:
+    class TemporaryChange(Exception):
+        pass
+    def __init__(self, duration):
+        import time
+        self.time = time
+        self._duration = duration
+        self._mark = self.time.time()
+    def wait(self):
+        now = self.time.time()
+        diff = self.wait_needed()
+        self._mark += self._duration
+        if diff > 0:
+            #print('sleeping for', diff)
+            self.time.sleep(diff)
+        #else:
+        #    print('no sleep needed')
+    def wait_needed(self):
+        return max(0,self._mark + self._duration - self.time.time())
+
+def filecontent(path, mode='rt'):
+    path = os.path.expanduser(path)
+    if os.path.exists(path):
+        with open(path, mode) as file:
+            return file.read().strip()
+    else:
+        return None
+
+class ai21(rate_limited, CausalLanguageModel):
+    apikey = os.environ.get('AI21_API_KEY', filecontent('~/.pen/ai21_api_key'))
+    def __init__(self, model='j1-large', apikey=None, daily_quota=30000):
+        super().__init__(24*60*60 / daily_quota)
         if apikey is None:
             apikey = ai21.apikey
         import requests
@@ -237,11 +266,11 @@ class ai21(CausalLanguageModel):
             return final_results
 
 class ai21_jumbo(ai21):
-    def __init__(self, model='j1-jumbo', apikey=None):
-        super().__init__(model, apikey)
+    def __init__(self, model='j1-jumbo', apikey=None, daily_quota=10000):
+        super().__init__(model, apikey, daily_quota)
 
 class openai(CausalLanguageModel):
-    apikey = os.environ.get('OPENAI_API_KEY')
+    apikey = os.environ.get('OPENAI_API_KEY', filecontent('~/.pen/openai_api_key'))
     def __init__(self, engine='davinci', apikey=None):
         if apikey is None:
             apikey = openai.apikey
@@ -300,6 +329,73 @@ class openai(CausalLanguageModel):
         else:
             return final_results
 
+class codex(openai):
+    # there is also cushman-codex which is faster
+    def __init__(self, engine='davinci-codex', apikey=None):
+        super().__init__(self, engine, apikey)
+
+# aix free is limited to 512 tokens / 1024 characters (runs on cpu)
+# this limitation can be lifted for a fee
+class aix(CausalLanguageModel):
+    '''aix is an interface to gpt-j available at apps.aixsolutionsgroup.com'''
+    apikey = os.environ.get('AIX_API_KEY', filecontent('~/.pen/aix_api_key'))
+    def __init__(self, apikey=None, model_id=None, max_chars=1024, host='https://api.aixsolutionsgroup.com'):
+        if apikey is None:
+            apikey = aix.apikey
+        import requests
+        self._apikey = apikey
+        self._model_id = model_id
+        self._max_chars = max_chars
+        self._url = host + '/v1/compose'
+        self.requests = requests
+    def _request(self, **json):
+        for key in [key for key, val in json.items() if val is None]:
+            del json[key]
+        print(json)
+        result = self.requests.post(self._url,
+            headers={
+                'Accept': 'application/json',
+                'APIKey': self._apikey
+            },
+            json=json,
+            timeout=60*20
+        )
+        #result.raise_for_status()
+        resultjson = result.json()
+        if 'message' in resultjson and len(resultjson) == 1:
+            resultjson = {'errors': [resultjson]}
+        if 'errors' in resultjson:
+            raise RuntimeError(*(error['message'] for error in resultjson['errors']))
+        return resultjson['data']
+    def __call__(self, text, num_return_sequences = 1, max_length = None, max_new_tokens = 8, top_k = None, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
+        if type(text) is str or text is None:
+            prompts = [text]
+        else:
+            prompts = text
+        
+        final_results = []
+        for prompt in prompts:
+            #'''https://aixapi.docs.apiary.io'''
+            result = self._request(
+                prompt = prompt[:self._max_chars],
+                token_min_length = max_new_tokens,
+                token_max_length = max_new_tokens,
+                temperature = temperature,
+                top_p = top_p,
+                top_k = top_k,
+                stop_sequence = eos_token_id,
+                custom_model_id = self._model_id
+            )
+            # returns model, compute_time, text, processor, prompt, token_max_lngth, temperature, top_p, stop_sequence
+            if return_full_text:
+                text = result['prompt'] + result['text']
+            else:
+                text = result['text']
+            final_results.append({
+                'generated_text': result['text']
+            })
+        return final_results
+
 class rpc_client:
     def __init__(self, model='genji', url='http://127.0.0.1:6686'):
         import requests
@@ -319,26 +415,6 @@ class rpc_client:
         return self._request('tokenizer', text=text, model=self.model, **kwparams)
     def __call__(self, text, **kwparams):
         return self._request('generate_text', text=text, model=self.model, **kwparams)
-
-class rate_limited:
-    class TemporaryChange(Exception):
-        pass
-    def __init__(self, duration):
-        import time
-        self.time = time
-        self._duration = duration
-        self._mark = self.time.time()
-    def wait(self):
-        now = self.time.time()
-        diff = self.wait_needed()
-        self._mark += self._duration
-        if diff > 0:
-            #print('sleeping for', diff)
-            self.time.sleep(diff)
-        #else:
-        #    print('no sleep needed')
-    def wait_needed(self):
-        return max(0,self._mark + self._duration - self.time.time())
 
 class eleuther_demo(rate_limited, CausalLanguageModel):
     def __init__(self, url='https://api.eleuther.ai/completion'):

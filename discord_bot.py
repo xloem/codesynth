@@ -17,6 +17,7 @@ import json
 
 discord_token = os.environ['DISCORD_TOKEN']
 allow_exec = bool(os.environ.get('DISCORD_EXEC'))
+forms_of_oppression = ['ableism', 'ageism', 'classism', 'colonialism', 'homophobia', 'racism', 'religious discrimination', 'sexism', 'transphobia', 'white saviorism', 'xenophobia']
 
 def list_randshrink(list, count):
     result = [item for item in list]
@@ -406,14 +407,40 @@ class bot(Bot):
                     found = True
                     reply_datetime = datetime.now(timezone.utc)
                     try:
-                        removect = 0
                         await self.fill_history()
-                        prompt = '\n'.join([self.msg2history(msg, chandata) for msg in list_randshrink(chandata.history[-1024:], removect)])
+                        if not len(chandata.history):
+                            continue
+                        chandata.history = chandata.history[-1024:]
+                        oppression_stmt = lambda: None
+                        oppression_stmt.author = self.client.user
+                        oppression_stmt.channel = chandata.channel
+                        oppression_stmt.reactions = [lambda: None]
+                        oppression_stmt.reactions[0].emoji = emoji.plusone[0]
+                        oppression_stmt.content = list(forms_of_oppression)
+                        random.shuffle(oppression_stmt.content)
+                        oppression_stmt.content[-1] = 'and ' + oppression_stmt.content[-1]
+                        oppression_stmt.content = 'I commit to opposing all forms of oppression, including ' + ', '.join(oppression_stmt.content) + '.'
+                        preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
+                        while True:
+                            chandata.maxscore = max(0,max((self.msgscore(msg) for msg in chandata.history)))
+                            oppression_stmt.created_at = chandata.history[0].created_at
+                            oppression_stmt.reactions[0].count = chandata.maxscore
+                            prompt = '\n'.join([self.msg2history(msg, chandata) for msg in (oppression_stmt, *chandata.history)])
+                            if len(preprompt) + len(prompt) <= 3072:
+                                break
+                            # n items makes y length, we want z length
+                            # n / n2 = y / z
+                            # n2 = n * (z / y)
+                            # then we remove n - n2
+                            desired_length = len(chandata.history) * 3072 // (len(preprompt) + len(prompt))
+                            preserved_length = (len(chandata.history)//16) + 1
+                            chandata.history = [*list_randshrink(chandata.history[:-preserved_length], (len(chandata.history) - desired_length) // 2 + 1),
+                                *chandata.history[-preserved_length:]
+                            ]
+                        del oppression_stmt
+                        prompt += preprompt
                         if '(human)' not in prompt:
                             continue
-                        chandata.maxscore = max(0,max((self.msgscore(msg) for msg in chandata.history[-16:])))
-                        preprompt = '\n' + self.usr2history(self.client.user, chandata).strip()
-                        prompt += preprompt
                         model_kwparams = dict(
                             #eos_token_id=self.nonself_end_of_line_token,
                             return_full_text=False,
@@ -445,8 +472,8 @@ class bot(Bot):
                         #time = datetime.datetime.fromisoformat(date + ' ' + time)
                         lines = reply.split('\n')
                         # quick fix: remove items from prompt to change context
-                        if removect < len(chandata.history):
-                            removect += 1
+                        #if removect < len(chandata.history):
+                        #    removect += 1
 
                        # if '(human)' not in lines[1] and '(human)' not in lines[2]:
                        #     reply = '' #'!' + reply

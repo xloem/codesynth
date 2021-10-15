@@ -78,6 +78,9 @@ class PromptCtx:
     default_model_kwparams = dict(return_full_text=False, max_new_tokens=512)
     default_local_kwparams = dict(append_delimiter=True, delimiter='\n', prefix='', include_eos=False)
 
+    @staticmethod
+    def list():
+        return [dir for dir in os.listdir(PromptCtx.dir) if os.path.isdir(os.path.join(PromptCtx.dir,dir))]
     def __init__(self, ctx, prompt = '', **kwparams):
         pending_kwparams = {}
         pending_kwparams.update(self.default_model_kwparams)
@@ -604,7 +607,9 @@ class bot(Bot):
             return False
         if is_bot_reply: # could also check for name mention
             try:
-                if message.content.lower().startswith('ctx '):
+                if message.content.lower() == 'ctx list':
+                    await self.reply_msg(message, '; '.join(PromptCtx.list()))
+                elif message.content.lower().startswith('ctx '):
                     _, name, cmd, *params = message.content.split(' ', 3)
                     content = params[0] if len(params) else ''
                     ctx = self.ctxs.get(name)

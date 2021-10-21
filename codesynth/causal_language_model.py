@@ -223,7 +223,7 @@ class ai21(rate_limited, CausalLanguageModel):
         reqparams = dict(
             numResults = num_return_sequences,
             maxTokens = max_new_tokens or (max_length - 1),
-            topP = top_p,
+            top_p = top_p,
             stopSequences = stop_sequences,
             # if topKReturn is > 0.0 then alternative tokens for both the prompt and completion
             #   are returned.
@@ -339,19 +339,33 @@ class codex(openai):
 class aix(CausalLanguageModel):
     '''aix is an interface to gpt-j available at apps.aixsolutionsgroup.com'''
     apikey = os.environ.get('AIX_API_KEY', filecontent('~/.pen/aix_api_key'))
-    def __init__(self, apikey=None, model_id=None, max_chars=1024, host='https://api.aixsolutionsgroup.com'):
+    def __init__(self, apikey=None, model_id=None, max_chars=1024, max_tokens=512, host='https://api.aixsolutionsgroup.com'):
         if apikey is None:
             apikey = aix.apikey
         import requests
         self._apikey = apikey
         self._model_id = model_id
+        if model_id is None:
+            try:
+                import transformers.models.auto as auto
+                self.tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            except:
+                pass
+        try:
+            import torch
+            self.model = _detokenizing_model(self, lambda tensor, token_id: torch.cat((tensor, torch.tensor([token_id]))))
+            self.model.config = auto.tokenization_auto.AutoConfig.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            self.model.config.max_position_embeddings = max_tokens
+            self.framework = 'pt'
+        except:
+            self.model = _detokenizing_model(self, lambda list, token_id: [*list, token_id])
         self._max_chars = max_chars
+        self._max_tokens = max_tokens
         self._url = host + '/v1/compose'
         self.requests = requests
     def _request(self, **json):
         for key in [key for key, val in json.items() if val is None]:
             del json[key]
-        print(json)
         result = self.requests.post(self._url,
             headers={
                 'Accept': 'application/json',
@@ -361,38 +375,46 @@ class aix(CausalLanguageModel):
             timeout=60*20
         )
         #result.raise_for_status()
+        if result.status_code == 204:
+            raise RuntimeError('empty aix body, likely prompt is too long')
         resultjson = result.json()
         if 'message' in resultjson and len(resultjson) == 1:
             resultjson = {'errors': [resultjson]}
         if 'errors' in resultjson:
+            print(json)
             raise RuntimeError(*(error['message'] for error in resultjson['errors']))
         return resultjson['data']
-    def __call__(self, text, num_return_sequences = 1, max_length = None, max_new_tokens = 8, top_k = None, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None):
+    def __call__(self, text, num_return_sequences = 1, max_length = None, max_new_tokens = 8, top_k = None, temperature = 0.0, top_p = 1.0, return_full_text = True, eos_token_id = None, prefix_allowed_tokens_fn = None):
         if type(text) is str or text is None:
             prompts = [text]
         else:
             prompts = text
         
         final_results = []
-        for prompt in prompts:
-            #'''https://aixapi.docs.apiary.io'''
-            result = self._request(
-                prompt = prompt[:self._max_chars],
-                token_min_length = max_new_tokens,
-                token_max_length = max_new_tokens,
-                temperature = temperature,
-                top_p = top_p,
-                top_k = top_k,
-                stop_sequence = eos_token_id,
-                custom_model_id = self._model_id
-            )
-            # returns model, compute_time, text, processor, prompt, token_max_lngth, temperature, top_p, stop_sequence
-            if return_full_text:
-                text = result['prompt'] + result['text']
-            else:
-                text = result['text']
+        for batch_id, prompt in enumerate(prompts):
+            text = prompt if return_full_text else ''
+            tokens_remaining = max_new_tokens
+            while tokens_remaining:
+                #'''https://aixapi.docs.apiary.io'''
+                token_max_length = min(tokens_remaining, 64)
+                result = self._request(
+                    prompt = prompt[:self._max_chars],
+                    token_min_length = token_max_length,
+                    token_max_length = token_max_length,
+                    temperature = temperature,
+                    top_p = top_p,
+                    top_k = top_k,
+                    stop_sequence = eos_token_id,
+                    custom_model_id = self._model_id
+                )
+                # returns model, compute_time, text, processor, prompt, token_max_lngth, temperature, top_p, stop_sequence
+                tokens_remaining -= token_max_length
+                text += result['text']
+                prompt += result['text']
+                if prefix_allowed_tokens_fn is not None:
+                    prefix_allowed_tokens_fn(batch_id, result['text'])
             final_results.append({
-                'generated_text': result['text']
+                'generated_text': text
             })
         return final_results
 
@@ -416,17 +438,58 @@ class rpc_client:
     def __call__(self, text, **kwparams):
         return self._request('generate_text', text=text, model=self.model, **kwparams)
 
+class _detokenizing_model:
+    '''Provides a generate function that passes off strings to an outer object.
+       Useful for wrapping APIs that don't support token ids if the tokenizer is known.
+    '''
+    def __init__(self, outer, tensor_append):
+        self._outer = outer
+        self._tensor_append = tensor_append
+    def generate(self, inputs_ids, max_length = None, prefix_allowed_tokens_fn = None, **kwparams):
+        if max_length is not None:
+            kwparams['max_new_tokens'] = max_length - max((len(ids) for ids in inputs_ids))
+        inputs = [
+            self._outer.tokenizer.decode(ids)
+            for ids in inputs_ids
+        ]
+        if prefix_allowed_tokens_fn is None:
+            inner_prefix_allowed_tokens_fn  = None
+        else:
+            token_batches = {}
+            def inner_prefix_allowed_tokens_fn(batch_id, result_portion):
+                if batch_id not in token_batches:
+                    token_batches[batch_id] = inputs_ids[batch_id,:0]
+                batch = token_batches[batch_id]
+                for token_id in self._outer.tokenizer.encode(result_portion):
+                    batch = self._tensor_append(batch, token_id)
+                    prefix_allowed_tokens_fn(batch_id, batch)
+                token_batches[batch_id] = batch
+        results = [
+            self._outer.tokenizer.encode(result['generated_text'])
+            for result in self._outer(inputs, prefix_allowed_tokens_fn = inner_prefix_allowed_tokens_fn, **kwparams)
+        ]
+        return results
+
 class eleuther_demo(rate_limited, CausalLanguageModel):
     def __init__(self, url='https://api.eleuther.ai/completion'):
         super().__init__(10)
         import requests
         self.url = url
         self.requests = requests
-    def tokenizer(self, text):
-        return {
-            'input_ids': [ text ]
-        }
-    def __call__(self, texts, max_new_tokens = 128, top_p = 1, temperature = 0, return_full_text = True, eos_token_id = None):
+        try:
+            import transformers.models.auto as auto
+            import torch
+            self.tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            self.model = _detokenizing_model(self, lambda tensor, token_id: torch.cat((tensor, torch.tensor([token_id]))))
+            self.model.config = auto.tokenization_auto.AutoConfig.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            self.framework = 'pt'
+        except:
+            pass
+    def __call__(self, texts, max_new_tokens = 128, top_p = 1, temperature = 0.00001, return_full_text = True, eos_token_id = None, prefix_allowed_tokens_fn = None):
+        if temperature is None:
+            temperature = 0
+        if top_p is None:
+            top_p = 1
         if type(texts) is str:
             texts = [texts]
         final_results = []
@@ -437,7 +500,7 @@ class eleuther_demo(rate_limited, CausalLanguageModel):
             json=dict(
                 context=text[-tailtrim:],
                 top_p=top_p,
-                temp=temperature,
+                temperature=temperature,
                 remove_input=not return_full_text
             )
             mark = self._mark
@@ -463,13 +526,20 @@ class eleuther_demo(rate_limited, CausalLanguageModel):
                 e.args = (*e.args, response.text)
                 raise
             if eos_token_id is not None:
-                for result in results:
-                    text = result['generated_text']
-                    offset = text.find(eos_token_id)
+                eos_token = self.tokenizer.decode(eos_token_id)
+            for batch_id, result in enumerate(results):
+                text = result['generated_text']
+                if eos_token_id is not None:
+                    offset = text.find(eos_token)
                     if offset >= 0:
-                        offset += len(eos_token_id)
+                        offset += len(eos_token)
                         text = text[:offset]
                         result['generated_text'] = text
+                if prefix_allowed_tokens_fn is not None:
+                    if return_full_text:
+                        prefix_allowed_tokens_fn(batch_id, text[len(json['context']):])
+                    else:
+                        prefix_allowed_tokens_fn(batch_id, text)
             final_results.extend(results)
         return final_results
 
@@ -482,19 +552,44 @@ class bellard_demo(rate_limited, CausalLanguageModel):
         self.url = url + '/' + model + '/completions'
         self.json = json
         self.requests = requests
-    def tokenizer(self, text):
-        return {
-            'input_ids': [ text ]
-        }
-    def __call__(self, texts, max_new_tokens = 128, top_p = 0.9, top_k = 40, temperature = 1, seed = None, return_full_text = True, eos_token_id = None):
+        try:
+            import transformers.models.auto as auto
+            import torch
+            self.tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            self.model = _detokenizing_model(self, lambda tensor, token_id: torch.cat((tensor, torch.tensor([token_id]))))
+            self.model.config = auto.tokenization_auto.AutoConfig.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            self.framework = 'pt'
+        except:
+            pass
+    def __call__(self, texts, max_new_tokens = 128, top_p = 1, top_k = 40, temperature = 0.100001, seed = None, return_full_text = True, eos_token_id = None, prefix_allowed_tokens_fn = None):
         if type(texts) is str:
             texts = [texts]
+        if eos_token_id is not None:
+            eos_token = self.tokenizer.decode(eos_token_id)
         if seed is None:
             global _global_seed
             seed = _global_seed
             _global_seed += 1
+        if top_p is None:
+            top_p = 1
+        if top_k is None:
+            top_k = 40
+        if temperature is None:
+            temperature = 0.100001
+        if top_p <= 0:
+            raise AssertionError('bellard top_p must be > 0')
+        if top_p > 1:
+            raise AssertionError('bellard top_p must be <= 1')
+        if temperature <= 0.1:
+            raise AssertionError('bellard temperature must be > 0.1')
+        if temperature > 10:
+            raise AssertionError('bellard temperature must be <= 10')
+        if top_k < 1:
+            raise AssertionError('bellard top_k must be >= 1')
+        if top_k > 1000:
+            raise AssertionError('bellard top_k must be <= 1000')
         final_results = []
-        for text in texts:
+        for batch_id, text in enumerate(texts):
             #if len(text) == 0:
             #    raise AssertionError('eleutherai demo needs a prompt')
             tailtrim = 3072
@@ -548,17 +643,21 @@ class bellard_demo(rate_limited, CausalLanguageModel):
                         #print(token_ct, token_ct + guesstoken_ct, max_new_tokens, line)
                         portion = line['text']
                         result += portion
-                        if (eos_token_id is not None and eos_token_id in result) or token_ct + guesstoken_ct >= max_new_tokens:
+                        if prefix_allowed_tokens_fn is not None:
+                            prefix_allowed_tokens_fn(batch_id, portion)
+                        if (eos_token_id is not None and eos_token in result) or token_ct + guesstoken_ct >= max_new_tokens:
                             done = True
                             break
                 if not done:
                     prompt = (text + result)[-tailtrim:]
                 
             if eos_token_id is not None:
-                    offset = result.find(eos_token_id)
+                    offset = result.find(eos_token)
                     if offset >= 0:
-                        offset += len(eos_token_id)
+                        offset += len(eos_token)
                         result = result[:offset]
+            if return_full_text:
+                result = text + result
             final_results.append({'generated_text': result})
         return final_results
 

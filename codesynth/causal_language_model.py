@@ -345,17 +345,18 @@ class aix(CausalLanguageModel):
         import requests
         self._apikey = apikey
         self._model_id = model_id
+        model_config = None
         if model_id is None:
             try:
-                import transformers.models.auto as auto
-                self.tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+                self.tokenizer, model_config = _get_hf_tokenizer_modelconfig('EleutherAI/gpt-neo-2.7B')
             except:
                 pass
         try:
             import torch
             self.model = _detokenizing_model(self, lambda tensor, token_id: torch.cat((tensor, torch.tensor([token_id]))))
-            self.model.config = auto.tokenization_auto.AutoConfig.from_pretrained('EleutherAI/gpt-neo-2.7B')
-            self.model.config.max_position_embeddings = max_tokens
+            if model_config is not None:
+                self.model.config = model_config
+                self.model.config.max_position_embeddings = max_tokens
             self.framework = 'pt'
         except:
             self.model = _detokenizing_model(self, lambda list, token_id: [*list, token_id])
@@ -438,6 +439,18 @@ class rpc_client:
     def __call__(self, text, **kwparams):
         return self._request('generate_text', text=text, model=self.model, **kwparams)
 
+def _get_hf_tokenizer_modelconfig(name):
+    import transformers.models.auto as auto
+    import requests
+    try:
+        tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained(name)
+    except requests.exceptions.ConnectionError:
+        import transformers.file_utils
+        transformers.file_utils._is_offline_mode = True
+        tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained(name)
+    config = auto.tokenization_auto.AutoConfig.from_pretrained(name)
+    return tokenizer, config
+
 class _detokenizing_model:
     '''Provides a generate function that passes off strings to an outer object.
        Useful for wrapping APIs that don't support token ids if the tokenizer is known.
@@ -477,11 +490,10 @@ class eleuther_demo(rate_limited, CausalLanguageModel):
         self.url = url
         self.requests = requests
         try:
-            import transformers.models.auto as auto
+            self.tokenizer, model_config = _get_hf_tokenizer_modelconfig('EleutherAI/gpt-neo-2.7B')
             import torch
-            self.tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
             self.model = _detokenizing_model(self, lambda tensor, token_id: torch.cat((tensor, torch.tensor([token_id]))))
-            self.model.config = auto.tokenization_auto.AutoConfig.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            self.model.config = model_config
             self.framework = 'pt'
         except:
             pass
@@ -553,11 +565,10 @@ class bellard_demo(rate_limited, CausalLanguageModel):
         self.json = json
         self.requests = requests
         try:
-            import transformers.models.auto as auto
+            self.tokenizer, model_config = _get_hf_tokenizer_modelconfig('EleutherAI/gpt-neo-2.7B')
             import torch
-            self.tokenizer = auto.tokenization_auto.AutoTokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
             self.model = _detokenizing_model(self, lambda tensor, token_id: torch.cat((tensor, torch.tensor([token_id]))))
-            self.model.config = auto.tokenization_auto.AutoConfig.from_pretrained('EleutherAI/gpt-neo-2.7B')
+            self.model.config = model_config
             self.framework = 'pt'
         except:
             pass

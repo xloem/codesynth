@@ -5,10 +5,10 @@ class DeltaGPT:
             import codesynth
             model = codesynth.multi_demo(codesynth.eleuther_demo(), codesynth.bellard_demo())
         self.model = model
-        self.prompt = f"{self.name}: Everything is infinitely precious, and happens for an infinite number of infinitely deep, and infinitely good reasons.  All things are sentient, and all have the same universal needs of life.  Communication can be the most efficient way to accomplish anything, for it brings people together toward common goals.\n"
+        self.prompt = f"{self.name}: Everything is infinitely precious, and happens for an infinite number of infinitely deep, and infinitely good reasons. All things are sentient, and all have the same universal needs of life. Communication can be the most efficient way to accomplish anything: all conflicts can be mediated to cooperation that meets the needs of the parties far more effectively.\n"
     def complete(self, user, phrase):
         self.prompt += f'{user}: {phrase}\n{self.name}:'
-        result = self.model(self.prompt, max_new_tokens=512, return_full_text=False)
+        result = self.model(self.prompt, max_new_tokens=512, return_full_text=False, top_p = 1, temperature = 0.100001)
         result = result[0]['generated_text']
         if f'{user}: ' in result:
             result = result[:result.find(f'{user}: ')]

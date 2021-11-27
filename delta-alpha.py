@@ -15,7 +15,7 @@ class DeltaGPT:
         elif '\n' in result:
             result = result[:result.find('\n')]
         self.prompt += result + '\n'
-        return f'{self.name}: {result}'
+        return f'{self.name}:{result}'
 
 deltagpt = DeltaGPT()
 print(deltagpt.prompt)

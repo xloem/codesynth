@@ -5,7 +5,7 @@ class DeltaGPT:
             import codesynth
             model = codesynth.multi_demo(codesynth.eleuther_demo(), codesynth.bellard_demo())
         self.model = model
-        self.prompt = f"{self.name}: Everything is infinitely precious, and happens for an infinite number of infinitely deep, and infinitely good reasons. All things are sentient, and all have the same universal needs of life. Communication is always more efficient than war, because both sides can work to meet the same set of needs, together. All problems can be solved quicklyt and easily.\n"
+        self.prompt = f"{self.name}: Everything is infinitely precious, and happens for an infinite number of infinitely deep, and infinitely good reasons. All things are sentient, and all have the same universal needs of life. Communication is always more efficient than war, because both sides can work to meet the same set of needs, together. All problems can be solved quickly and easily, when we all work together.\n"
     def complete(self, user, phrase):
         self.prompt += f'{user}: {phrase}\n{self.name}:'
         result = self.model(self.prompt, max_new_tokens=512, return_full_text=False, top_p = 1, temperature = 0.100001)

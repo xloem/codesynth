@@ -557,48 +557,70 @@ class eleuther_demo(rate_limited, CausalLanguageModel):
 
 _global_seed = 0
 
-class bellard_demo(rate_limited, CausalLanguageModel):
-    def __init__(self, model='gptj_6B', url='https://bellard.org/textsynth/api/v1/engines'):
+class textsynth(rate_limited, CausalLanguageModel):
+    apikey = os.environ.get('TEXTSYNTH_API_KEY', '842a11464f81fc8be43ac76fb36426d2')
+    def __init__(self, model='fairseq_gpt_13B', apikey=None, url='https://api.textsynth.com/v1/engines'):
         super().__init__(21)
+        if apikey is None:
+            apikey = textsynth.apikey
         import json, requests
+        self._authorization = 'Bearer ' + apikey
         self.url = url + '/' + model + '/completions'
         self.json = json
         self.requests = requests
+        hf_model = dict(
+            gptj_6B = 'EleutherAI/gpt-j-6B',
+            boris_6B = 'Cedille/fr-boris',
+            fairseq_gpt_13B = 'KoboldAI/fairseq-dense-13B',
+            gptneox_20B = 'EleutherAI/gpt-neox-20b',
+            codegen_6B_mono = 'Salesforce/codegen-6B-mono',
+            m2m100_1_2B = 'facebook/m2m100_1.2B',
+            stable_diffusion = 'CompVis/stable-diffusion',
+        ).get('model', 'gpt-neo-2.7B')
         try:
-            self.tokenizer, model_config = _get_hf_tokenizer_modelconfig('EleutherAI/gpt-neo-2.7B')
+            self.tokenizer, model_config = _get_hf_tokenizer_modelconfig(hf_model)
             import torch
             self.model = _detokenizing_model(self, lambda tensor, token_id: torch.cat((tensor, torch.tensor([token_id]))))
             self.model.config = model_config
             self.framework = 'pt'
         except:
             pass
-    def __call__(self, texts, max_new_tokens = 128, top_p = 1, top_k = 40, temperature = 0.100001, seed = None, return_full_text = True, eos_token_id = None, prefix_allowed_tokens_fn = None):
+    def __call__(self, texts, num_return_sequences = 1, max_new_tokens = 128, top_p = 1, top_k = 40, temperature = 0.100001, seed = None, return_full_text = True, eos_token_id = None, prefix_allowed_tokens_fn = None):
         if type(texts) is str:
             texts = [texts]
         if eos_token_id is not None:
             eos_token = self.tokenizer.decode(eos_token_id)
+        else:
+            eos_token = None
         if seed is None:
             global _global_seed
             seed = _global_seed
             _global_seed += 1
+        if num_return_sequences is None:
+            num_return_sequences = 1
         if top_p is None:
             top_p = 1
         if top_k is None:
             top_k = 40
         if temperature is None:
             temperature = 0.100001
-        if top_p <= 0:
-            raise AssertionError('bellard top_p must be > 0')
-        if top_p > 1:
-            raise AssertionError('bellard top_p must be <= 1')
+        if num_return_sequences < 1:
+            raise AssertionError('num_return_sequences must be >= 1')
+        if num_return_sequences > 16:
+            raise AssertionError('textsynth num_return_sequences must be <= 16')
+        # some of these limits may be out of date and could bear retesting
         if temperature <= 0.1:
-            raise AssertionError('bellard temperature must be > 0.1')
+            raise AssertionError('textsynth temperature must be > 0.1')
         if temperature > 10:
-            raise AssertionError('bellard temperature must be <= 10')
+            raise AssertionError('textsynth temperature must be <= 10')
         if top_k < 1:
-            raise AssertionError('bellard top_k must be >= 1')
+            raise AssertionError('textsynth top_k must be >= 1')
         if top_k > 1000:
-            raise AssertionError('bellard top_k must be <= 1000')
+            raise AssertionError('textsynth top_k must be <= 1000')
+        if top_p <= 0:
+            raise AssertionError('textsynth top_p must be > 0')
+        if top_p > 1:
+            raise AssertionError('textsynth top_p must be <= 1')
         final_results = []
         for batch_id, text in enumerate(texts):
             #if len(text) == 0:
@@ -611,28 +633,38 @@ class bellard_demo(rate_limited, CausalLanguageModel):
             while not done:
                 json=dict(
                     prompt=prompt,
+                    max_tokens=max_new_tokens,
+                    stream=True,
+                    stop=eos_token,
+                    n=num_return_sequences,
                     temperature=temperature,
                     top_k=top_k,
                     top_p=top_p,
-                    seed=seed,
-                    stream=True
+                    seed=seed, # is seed still used?
+                    # logit_bias : { "token_id": pct_addition_neg_100_to_100 } #make some tokens likely or unlikely
+                    # presence_penalty : neg_2_to_2  # make already seen tokens discouraged or encouraged
+                    # frequency_penalty: neg_2_to_2 # same as presence but based on frequency
+                    # repetition_penalty: number_defaulting_to_1 # repeat token logits are divided by this
+                    # typical_p: 0_to_1 # better than top_p, starts with entropically typical results rather than most prob
                 )
                 while True:
                     self.wait()
                     response = self.requests.post(self.url,
+                        headers={'Authorization': self._authorization},
                         json=json,
                         stream=True
                     )
                     self._mark = self.time.time() + self._duration
                     if response.status_code == 509:
-                        # rate limit exceeded
-                        print('bellard rate limit hit =/')
+                        # rate limit exceeded, this may need to be updated
+                        print('textsynth rate limit hit =/')
                         self._mark += 60 *30
-                        raise rate_limited.TemporaryChange('bellard rate limit exceeded')
+                        raise rate_limited.TemporaryChange('textsynth rate limit exceeded')
                     elif response.status_code == 400:
                         # i'm guessing this is a server bug where it produces unicode output that it can't handle
-                        print('bellard status code 400, unicode output produced?')
-                        raise rate_limited.TemporaryChange('bellard status code 400, unicode output produced?')
+                        # this may need to be updated for textsynth, likely an old fixed bug
+                        print('textsynth status code 400, unicode output produced?')
+                        raise rate_limited.TemporaryChange('textsynth status code 400, unicode output produced?')
                     else:
                         break
                 try:
@@ -646,16 +678,17 @@ class bellard_demo(rate_limited, CausalLanguageModel):
                 for line in response.iter_lines():
                     if len(line.strip()):
                         line = self.json.loads(line)
-                        if 'total_tokens' in line:
-                            token_ct += line['total_tokens']
+                        if 'output_tokens' in line:
+                            token_ct += line['output_tokens'] / len(line['text'])
                             guesstoken_ct = 0
                         else:
                             guesstoken_ct += 3
                         #print(token_ct, token_ct + guesstoken_ct, max_new_tokens, line)
                         portion = line['text']
-                        result += portion
+                        result += portion # needs updating for multiple results
                         if prefix_allowed_tokens_fn is not None:
                             prefix_allowed_tokens_fn(batch_id, portion)
+                        # this probably needs updating ofr textsynth too, it has this functionality already:
                         if (eos_token_id is not None and eos_token in result) or token_ct + guesstoken_ct >= max_new_tokens:
                             done = True
                             break
@@ -671,6 +704,7 @@ class bellard_demo(rate_limited, CausalLanguageModel):
                 result = text + result
             final_results.append({'generated_text': result})
         return final_results
+bellard_demo = textsynth
 
 class multi_demo(rate_limited, CausalLanguageModel):
     def __init__(self, *submodels):

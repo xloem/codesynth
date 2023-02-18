@@ -93,6 +93,8 @@ class transformers_base:
                 self.logger.warning('===')
 
         try:
+            tokenizer = tokenizer or model
+            model = AutoModelForCausalLM.from_pretrained(model, device_map='auto')
             self.pipeline = transformers.pipeline(
                 'text-generation',
                 model,
@@ -132,19 +134,14 @@ class genji(finetuneanon):
     def __init__(self, model='NovelAI/genji-python-6B-split/model', tokenizer='EleutherAI/gpt-neo-2.7B', device=0):
         super().__init__(model, tokenizer, device)
 
-class stellaathena(transformers_base, CausalLanguageModel):
-    def __init__(self, model='EleutherAI/gpt-j-6B', *params, **kwparams):
-        import stellaathena_transformers as stellaathena
-        super().__init__(stellaathena, model, *params, **kwparams)
-
-class gptj6b(stellaathena):
-    def __init__(self, model='EleutherAI/gpt-j-6B', *params, **kwparams):
-        super().__init__(model, *params, **kwparams)
-
 class huggingface(transformers_base, CausalLanguageModel):
     def __init__(self, model=None, *params, **kwparams):
         import transformers
         super().__init__(transformers, model, *params, **kwparams)
+
+class gptj6b(huggingface):
+    def __init__(self, model='EleutherAI/gpt-j-6B', *params, **kwparams):
+        super().__init__(model, *params, **kwparams)
 
 class ghpy(huggingface):
     def __init__(self, model='lg/ghpy_20k', *params, **kwparams):
@@ -152,6 +149,14 @@ class ghpy(huggingface):
 
 class ghpy_tiny(ghpy):
     def __init__(self, model='lg/ghpy_2k', *params, **kwparams):
+        super().__init__(model, *params, **kwparams)
+
+class codegen(huggingface):
+    def __init__(self, model='Salesforce/codegen-16B-mono', *params, **kwparams):
+        super().__init__(model, *params, **kwparams)
+
+class diff_codegen(huggingface):
+    def __init__(self, model='CarperAI/diff-codegen-6b-v2', *params, **kwparams):
         super().__init__(model, *params, **kwparams)
 
 class rate_limited:
